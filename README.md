@@ -13,7 +13,7 @@ Cellaris for a workspace URL and access token.
 
 - Estimated cell-type composition of each donor
 - A metabolic map of the estimated single-cell profiles
-- Activity of 101 KEGG metabolic pathways by cell type, with interactive pathway maps
+- Activity of 83 human KEGG metabolic pathways by cell type, with interactive pathway maps
 - Marker gene expression by cell type
 - Downloadable result tables
 

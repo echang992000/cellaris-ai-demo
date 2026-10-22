@@ -61,11 +61,13 @@ const DEMO = () => window.CELLARIS_DEMO || {};
 /* Files published on the public site; link to the public copies when the page is served elsewhere. */
 const PUBLIC_SITE = 'https://echang992000.github.io/cellaris-ai-demo/';
 const publicFile = path => (location.hostname.endsWith('github.io') ? '' : PUBLIC_SITE) + path;
-/* KEGG reference maps of microbial or plant metabolism. Human enzymes map onto them, so they
-   are scored, but they are grouped separately and left out of summary rankings. */
-const NON_MAMMALIAN = new Set(['rn00074', 'rn00362', 'rn00440', 'rn00521', 'rn00625', 'rn00643', 'rn00680', 'rn00710', 'rn00720', 'rn00909', 'rn00950', 'rn00997']);
+/* Human pathway scope. KEGG reference maps that are not human biology (no human KEGG map, or a named
+   process absent from human cells) are withheld by the compute workspace; this list also filters
+   imported result files. Generated from the human pathway scope (KEGG pathway database of 2026/10/21 (587 maps)). */
+const NON_HUMAN = new Set(["00073","00074","00121","00195","00196","00253","00254","00261","00290","00300","00311","00331","00332","00333","00361","00362","00363","00364","00365","00400","00401","00402","00403","00404","00405","00440","00460","00521","00522","00523","00524","00525","00540","00542","00543","00550","00552","00566","00571","00572","00621","00622","00623","00624","00625","00626","00627","00633","00642","00643","00680","00710","00720","00791","00901","00902","00903","00904","00905","00906","00907","00908","00909","00930","00940","00941","00942","00943","00944","00945","00946","00950","00960","00965","00966","00975","00981","00984","00996","00997","00998","00999","01010","01051","01052","01053","01054","01055","01056","01057","01059","01060","01061","01062","01063","01064","01065","01066","01070","01110","01120","01220"]);
+const inHumanScope = id => !NON_HUMAN.has(String(id).slice(-5));
 const isOverviewMap = id => /^rn01[12]\d\d$/.test(id);
-const pathwayGroup = p => isOverviewMap(p.id) ? 'Overview map' : NON_MAMMALIAN.has(p.id) ? 'Non-mammalian reference map' : p.category;
+const pathwayGroup = p => isOverviewMap(p.id) ? 'Overview map' : p.category;
 const spread = p => { const v = p.activity.filter(Number.isFinite); const m = v.reduce((a, b) => a + b, 0) / (v.length || 1); return m > 0 ? (Math.max(...v) - Math.min(...v)) / m : 0; };
 
 function toast(message) {
@@ -92,13 +94,14 @@ function prepare(raw, origin) {
       throw new Error('Invalid pathway activity table.');
   for (const c of result.cells)
     if (!Number.isFinite(c.x) || !Number.isFinite(c.y) || !names.has(c.type)) throw new Error('Invalid embedding coordinates.');
+  const pathways = result.pathways.filter(p => inHumanScope(p.id)).map(p => ({ ...p, category: pathwayGroup(p) }));
   const samples = (raw.samples || result.samples || []).map(s => ({
     id: String(s.id), label: s.label || String(s.id), profiles: s.profiles ?? null, fractions: s.fractions || {}, meta: s.meta || {},
   }));
   return {
     origin, title: raw.title || 'Pancreas analysis', subtitle: raw.subtitle || '', description: raw.description || '',
-    cellTypes, pathways: result.pathways.map(p => ({ ...p, category: pathwayGroup(p) })), cells: result.cells, geneExpression: result.geneExpression || {},
-    counts: result.counts, samples, metadata: result.metadata || result.provenance || {}, warnings: result.warnings || [],
+    cellTypes, pathways, cells: result.cells, geneExpression: result.geneExpression || {},
+    counts: { ...result.counts, pathways: pathways.length }, samples, metadata: result.metadata || result.provenance || {}, warnings: result.warnings || [],
     figures: raw.figures || [], maps: raw.maps || {},
   };
 }
@@ -188,7 +191,7 @@ function pathwayTable(limit = 0) {
   const d = state.data, [lo, hi] = activityRange(d);
   const types = d.cellTypes.slice(0, 9);
   let rows = d.pathways.filter(p => (!state.search || `${p.name} ${p.id}`.toLowerCase().includes(state.search)) && (state.category === 'all' || p.category === state.category));
-  if (limit) rows = rows.filter(p => !isOverviewMap(p.id) && !NON_MAMMALIAN.has(p.id)).sort((a, b) => spread(b) - spread(a)).slice(0, limit);
+  if (limit) rows = rows.filter(p => !isOverviewMap(p.id)).sort((a, b) => spread(b) - spread(a)).slice(0, limit);
   return `<section class="card"><div class="card-head"><div><div class="card-title">${limit ? 'Pathways that differ most between cell types' : 'Pathway activity by cell type'}</div><div class="card-sub">${limit ? 'Activity by cell type in relative units; ranked by the spread between cell types (overview and non-mammalian maps excluded)' : 'Mean estimated activity per KEGG pathway and cell type, relative units'}</div></div>
     ${limit ? `<button class="btn btn-secondary" data-view="pathways">All ${d.pathways.length} pathways</button>` : `<button class="btn btn-secondary" data-action="exportpathways">${icon('download')} CSV</button>`}</div>
     <div class="card-body table-wrap"><table class="table"><thead><tr><th>Pathway</th><th>Category</th><th class="num" title="Mean activity across cell types, relative units">Mean</th>${types.map(t => `<th class="num" title="${esc(t.label)}"><span class="swatch" style="background:${t.color};margin-right:5px"></span>${esc(t.label)}</th>`).join('')}</tr></thead>
@@ -280,7 +283,7 @@ function viewPathways() {
       <div class="plist">${list.map(x => `<button class="${x.id === p.id ? 'active' : ''}" data-pathway="${esc(x.id)}"><b>${esc(x.name)}</b><small>${esc(x.id)} · ${esc(x.category)} · mean activity ${sig(x.score)}</small></button>`).join('') || '<div class="empty">No pathways match.</div>'}</div></section>
     <div class="grid">
       <section class="card"><div class="card-head"><div><div class="card-title">${esc(p.name)}</div><div class="card-sub">${esc(p.id)} · ${esc(p.category)}</div></div><span class="badge accent">KEGG</span></div>
-        <div class="card-body"><div class="metrics"><div class="metric"><small>Mean activity (relative units)</small><b>${sig(p.score)}</b></div><div class="metric"><small>Reactions</small><b>${num(p.reactionCount)}</b></div><div class="metric"><small>Enzyme genes</small><b>${num(p.genes.length)}</b></div><div class="metric"><small>Highest in</small><b>${esc(top?.label || '—')}</b></div></div>
+        <div class="card-body">${p.note ? `<p class="note" style="margin:0 0 14px">${esc(p.note)}</p>` : ''}<div class="metrics"><div class="metric"><small>Mean activity (relative units)</small><b>${sig(p.score)}</b></div><div class="metric"><small>Reactions</small><b>${num(p.reactionCount)}</b></div><div class="metric"><small>Enzyme genes</small><b>${num(p.genes.length)}</b></div><div class="metric"><small>Highest in</small><b>${esc(top?.label || '—')}</b></div></div>
         <div class="note" style="margin:16px 0 6px">Activity by cell type (relative units)</div><div>${vals.map(x => `<div class="hbar"><span>${esc(x.t.label)}</span><span class="track"><i style="width:${(x.v / vmax * 100).toFixed(1)}%;background:${x.t.color}"></i></span><b>${sig(x.v)}</b></div>`).join('')}</div></div></section>
       <section class="card"><div class="card-head"><div><div class="card-title">Pathway map</div><div class="card-sub">Lines are reactions and points are metabolites. Line color shows mean reaction activity across all profiles (relative units); hover for names.</div></div></div>
         <div class="card-body"><div id="pathway-map" class="map-frame"><div class="empty">Loading pathway map…</div></div></div></section>
