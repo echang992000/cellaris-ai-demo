@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Cellaris AI Demo · Single-cell metabolic profiling from bulk RNA-seq</title>
+  <meta name="description" content="Cellaris AI Demo: reconstruct cell-type composition, single-cell expression profiles and metabolic pathway activity from human pancreatic bulk RNA-seq.">
+  <meta name="theme-color" content="#0b1f33">
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar" id="sidebar">
+    <a class="brand" href="#overview" data-view="overview" aria-label="Cellaris AI Demo home">
+      <img src="assets/logo.svg" alt=""><span class="brand-name">Cellaris<span>AI</span></span><span class="brand-tag">Demo</span>
+    </a>
+    <button class="btn btn-primary btn-block" data-action="new"><i data-icon="upload"></i> New analysis</button>
+    <nav class="nav" aria-label="Main">
+      <div class="nav-section">Analysis</div>
+      <button class="nav-item" data-view="overview"><i data-icon="overview"></i>Overview</button>
+      <button class="nav-item" data-view="samples"><i data-icon="samples"></i>Samples</button>
+      <button class="nav-item" data-view="pathways"><i data-icon="pathways"></i>Pathways<span class="nav-count" id="pathway-count"></span></button>
+      <button class="nav-item" data-view="genes"><i data-icon="genes"></i>Gene expression</button>
+      <div class="nav-section">Report</div>
+      <button class="nav-item" data-view="figures"><i data-icon="figures"></i>Figures</button>
+      <button class="nav-item" data-view="about"><i data-icon="methods"></i>About</button>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="dataset-card"><div class="label">Dataset</div><b id="dataset-name"></b><small id="dataset-meta"></small></div>
+      <button class="worker-status" data-action="worker"><span class="dot"></span><span id="worker-label">Workspace not connected</span></button>
+      <button class="link-btn" data-action="import">Import results (JSON)</button>
+    </div>
+  </aside>
+  <div class="main">
+    <header class="topbar">
+      <button class="menu-btn" aria-label="Open navigation">☰</button>
+      <div class="crumbs">Cellaris AI Demo <span aria-hidden="true">/</span> <b id="crumb">Overview</b></div>
+      <div class="top-actions"><button class="btn btn-ghost" data-action="guide">Getting started</button><button class="btn btn-secondary" data-action="export"><i data-icon="download"></i> Export</button></div>
+    </header>
+    <main id="view" class="view" tabindex="-1"></main>
+    <footer class="footer">Cellaris AI Demo · Research use only · Analyses run in your Cellaris compute workspace; this website does not store uploaded data.</footer>
+  </div>
+</div>
+<div id="modal-root"></div>
+<div id="toast" role="status" aria-live="polite"></div>
+<input type="file" id="result-file" accept=".json,application/json" hidden>
+<script src="demo-data.js" defer></script>
+<script src="app.js" defer></script>
+</body>
+</html>
