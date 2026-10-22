@@ -231,3 +231,4 @@ details.advanced summary{cursor:pointer;font-weight:600;font-size:13px}
 .lit-defs dl{margin:6px 0 0}
 .lit-defs dt{font-weight:600;color:var(--ink-2);margin-top:8px}
 .lit-defs dd{margin:2px 0 0}
+.claims blockquote{margin:5px 0 0;padding:0 0 0 10px;border-left:2px solid var(--accent-line);color:var(--ink-2);font-size:12.5px}

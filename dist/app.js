@@ -287,7 +287,7 @@ function viewPathways() {
         <div class="note" style="margin:16px 0 6px">Activity by cell type (relative units)</div><div>${vals.map(x => `<div class="hbar"><span>${esc(x.t.label)}</span><span class="track"><i style="width:${(x.v / vmax * 100).toFixed(1)}%;background:${x.t.color}"></i></span><b>${sig(x.v)}</b></div>`).join('')}</div></div></section>
       <section class="card"><div class="card-head"><div><div class="card-title">Pathway map</div><div class="card-sub">Lines are reactions and points are metabolites. Line color shows mean reaction activity across all profiles (relative units); hover for names.</div></div></div>
         <div class="card-body"><div id="pathway-map" class="map-frame"><div class="empty">Loading pathway map…</div></div></div></section>
-      <section class="card" id="literature-card"><div class="card-head"><div><div class="card-title">Literature support</div><div class="card-sub">Human pancreas papers that mention the enzymes of each reaction on this map, curated enzyme evidence and assessed abstracts. Counts show prior study, not proof of activity.</div></div><span class="badge accent">Human pancreas</span></div>
+      <section class="card" id="literature-card"><div class="card-head"><div><div class="card-title">Literature support</div><div class="card-sub">Human pancreas papers that mention the enzymes of each reaction on this map, curated enzyme evidence and abstracts flagged as relevant. Counts show prior study, not proof of activity.</div></div><span class="badge accent">Human pancreas</span></div>
         <div class="card-body" id="literature-body"><div class="empty">Loading literature support…</div></div></section>
       <section class="card"><div class="card-head"><div><div class="card-title">Enzyme genes</div><div class="card-sub">Genes in the uploaded data that encode enzymes of this pathway</div></div></div>
         <div class="card-body"><div class="chips">${p.genes.slice(0, 160).map(g => `<span class="chip">${esc(g)}</span>`).join('') || '<span class="note">No mapped genes.</span>'}</div>${p.genes.length > 160 ? `<p class="note">${num(p.genes.length - 160)} more genes in the CSV export.</p>` : ''}</div></section>
@@ -340,7 +340,6 @@ async function loadPathwayMap() {
 
 /* ---------- Literature support ---------- */
 const typeNoun = n => { const l = typeLabel(n); return /^[A-Z]{2}/.test(l) ? l : l.charAt(0).toLowerCase() + l.slice(1); };
-const STANCE = { supports: 'Supports', partially_supports: 'Partly supports', contradicts: 'Contradicts', unrelated: 'Not relevant' };
 const pubmedUrl = pmids => pmids.length === 1 ? `https://pubmed.ncbi.nlm.nih.gov/${pmids[0]}/` : `https://pubmed.ncbi.nlm.nih.gov/?term=${pmids.map(x => `${x}[pmid]`).join('+OR+')}&sort=date`;
 const paperLink = (n, pmids, what) => !Number.isFinite(n) ? '—' : n && pmids?.length ? `<a href="${pubmedUrl(pmids)}" target="_blank" rel="noopener" title="Open the ${pmids.length === 1 ? 'paper' : `${pmids.length} most recent papers`} (${esc(what)}) in PubMed">${num(n)}</a>` : num(n);
 function literatureMeta() { const d = state.data; return d.literatureMeta || (d.origin === 'demo' ? DEMO().literatureMeta : null) || null; }
@@ -361,13 +360,12 @@ function hoverLiterature(c) {
     (c.top ? `<br>Papers in ${esc(typeNoun(c.top))} cells: ${num(c.cell)} (expected ${sig(c.expected)})` : '') +
     (c.hypothesis ? '<br><b>Candidate hypothesis</b>' : '');
 }
-function literatureClaims(lit, label) {
+function literatureClaims(lit, noun) {
   const cl = lit.claims;
-  if (!cl) return `<p class="note" style="margin:14px 0 0">No abstracts were assessed for this pathway in ${esc(label)} cells.</p>`;
-  const counts = ['supports', 'partially_supports', 'contradicts', 'unrelated'].map(k => `<span class="stance s-${k}">${STANCE[k]} ${num(cl[k] || 0)}</span>`).join('');
+  if (!cl) return `<p class="note" style="margin:14px 0 0">No human pancreas abstracts mention this pathway's enzymes in ${esc(noun)} cells.</p>`;
   const ORIGIN = { human: 'Human data', mixed: 'Human and animal data' };
-  const items = (cl.items || []).map(it => `<li><span class="stance s-${esc(it.stance)}">${esc(STANCE[it.stance] || it.stance)}</span><a href="https://pubmed.ncbi.nlm.nih.gov/${encodeURIComponent(it.pmid)}/" target="_blank" rel="noopener">${esc(it.title || `PMID ${it.pmid}`)}</a><small>${esc(it.year || '')} · PMID ${esc(it.pmid)}${ORIGIN[it.origin] ? ` · ${ORIGIN[it.origin]}` : ''}</small>${it.rationale ? `<p>${esc(it.rationale)}</p>` : ''}</li>`).join('');
-  return `<div class="lit-claims"><div class="note" style="margin:18px 0 6px">Assessed abstracts: is this pathway active in ${esc(label)} cells? (${num(cl.assessed)} abstracts)</div><div class="stance-row">${counts}</div>${items ? `<ol class="claims">${items}</ol>` : '<p class="note">None of the assessed abstracts addressed this pathway in these cells.</p>'}</div>`;
+  const items = (cl.items || []).map(it => `<li><a href="https://pubmed.ncbi.nlm.nih.gov/${encodeURIComponent(it.pmid)}/" target="_blank" rel="noopener">${esc(it.title || `PMID ${it.pmid}`)}</a><small>${esc(it.year || '')} · PMID ${esc(it.pmid)}${ORIGIN[it.origin] ? ` · ${ORIGIN[it.origin]}` : ''}</small>${it.quote ? `<blockquote>“${esc(it.quote)}”</blockquote>` : ''}</li>`).join('');
+  return `<div class="lit-claims"><div class="note" style="margin:18px 0 6px">Abstracts on this pathway in ${esc(noun)} cells: ${num(cl.relevant)} of ${num(cl.assessed)} screened abstracts flagged as relevant${cl.items?.length ? ' (quoted below)' : ''}</div>${items ? `<ol class="claims">${items}</ol>` : ''}</div>`;
 }
 function literatureTable(lit) {
   const key = state.litSort || 'pancreas', dir = state.litDir || -1;
@@ -381,7 +379,7 @@ function literatureTable(lit) {
     const tie = Number.isFinite(c.margin) && c.margin < 0.25 && c.second;
     const spec = !Number.isFinite(c.margin) ? '' : tie ? `<small>near tie with ${esc(typeNoun(c.second))} (${sig(c.margin)} SD)</small>` : `<small>margin ${sig(c.margin)} SD</small>`;
     const rx = String(c.reactions || '').split(';').filter(Boolean);
-    return `<tr><td>${esc(c.a)} – ${esc(c.b)}${c.hypothesis ? `<span class="badge warn hyp" title="${c.informativeAbsence ? 'At least one paper would have been expected in this cell type' : 'Few papers would have been expected in this cell type'}">Candidate hypothesis${c.informativeAbsence ? ' · informative' : ''}</span>` : ''}<small>${esc(rx.slice(0, 3).join(', '))}${rx.length > 3 ? ` +${rx.length - 3}` : ''}</small></td>
+    return `<tr><td>${esc(c.a)} – ${esc(c.b)}${c.hypothesis ? `<span class="badge warn hyp" title="Specific prediction; at least one paper would have been expected in this cell type, none found">Candidate hypothesis</span>` : ''}<small>${esc(rx.slice(0, 3).join(', '))}${rx.length > 3 ? ` +${rx.length - 3}` : ''}</small></td>
       <td>${genes}</td><td>${c.top ? esc(typeLabel(c.top)) : '—'}${spec}</td>
       <td class="num">${g ? paperLink(c.pancreas, c.pancreasPmids, 'human pancreas') : '—'}</td>
       <td class="num">${g && c.top ? paperLink(c.cell, c.cellPmids, `${typeNoun(c.top)} cells`) : '—'}${g && Number.isFinite(c.expected) ? `<small>expected ${sig(c.expected)}</small>` : ''}</td>
@@ -396,12 +394,12 @@ function literatureDefinitions() {
   const m = literatureMeta();
   return `<details class="lit-defs"><summary>How these numbers are computed</summary><dl>
     <dt>Human pancreas papers</dt><dd>PubMed records indexed with the MeSH term Humans that concern the pancreas or pancreatic islets and are annotated with at least one enzyme gene of the reaction (PubTator3 gene annotations). Each paper counts once. Papers on pancreatic cancer are excluded.</dd>
-    <dt>Papers in that cell type</dt><dd>The subset that also concerns the cell type with the highest relative activity (for example, MeSH Insulin-Secreting Cells or “beta cell” for beta cells).</dd>
+    <dt>Papers in that cell type</dt><dd>The subset that also concerns the cell type with the highest relative activity (for example, MeSH Insulin-Secreting Cells or “beta cell” for beta cells). Papers on islet autoimmunity mention beta-cell autoantigens such as GAD2 and G6PC2 together with immune cells; such counts reflect immunology, not enzyme activity in immune cells.</dd>
     <dt>Expected and enrichment</dt><dd>Expected = human pancreas papers × the share of human pancreas literature that concerns that cell type. Enrichment = (observed + 0.5) / (expected + 0.5); values above 1 mean the enzymes are discussed in that cell type more often than an average gene studied in pancreas.</dd>
     <dt>Curated enzyme papers</dt><dd>Experimental evidence for the enzyme's catalytic activity in reviewed human UniProtKB/Swiss-Prot entries, matched to the reaction by EC number.</dd>
     <dt>Highest relative activity</dt><dd>Each profile's reaction activities are divided by that profile's mean activity, averaged per cell type and compared across cell types. The margin is the difference between the first and second cell type in standard deviations across cell types.</dd>
-    <dt>Candidate hypothesis</dt><dd>Predicted activity is specific to one cell type (margin of at least 1 SD) and the enzymes have been studied in human pancreas, but no paper links them to that cell type. Marked informative when at least one such paper would have been expected. These are hypotheses for follow-up, not findings.</dd>
-    <dt>Assessed abstracts</dt><dd>Abstracts of papers that mention the pathway's enzymes in the cell type were assessed automatically for whether they support activity of the pathway in that cell type. Only evidence from human material counts: abstracts whose evidence for the claim comes from animals, non-human cells or an unstated source are counted as not relevant. Labels were calibrated against shuffled claims and spot-checked; read the abstract before relying on a label.</dd>
+    <dt>Candidate hypothesis</dt><dd>Predicted activity is specific to one cell type (margin of at least 1 SD), and the enzymes are studied often enough in human pancreas that at least one paper in that cell type would be expected, but none was found. These are hypotheses for follow-up, not findings.</dd>
+    <dt>Abstracts flagged as relevant</dt><dd>Abstracts of papers that mention the pathway's enzymes in the cell type were screened automatically for statements about the pathway or its enzymes in that cell type in human material; abstracts whose evidence comes only from animals, non-human cells or an unstated source are not flagged. Flagged abstracts are shown with the sentence that was quoted. The screen does not decide whether a paper supports or contradicts activity: read the quoted text and the paper.</dd>
     <dt>Reading the counts</dt><dd>Paper counts show that enzymes have been studied in human pancreas. They do not show that a reaction is active, and well-studied genes collect more papers.</dd>
   </dl>${m ? `<p class="note" style="margin:10px 0 0">Literature index ${esc(m.version || '')}, built ${esc(m.built || '')}: ${num(m.papers)} human pancreas papers, ${num(m.genes)} enzyme genes.</p>` : ''}</details>`;
 }
@@ -420,13 +418,13 @@ async function loadLiterature() {
   $('#literature-body').innerHTML = lit ? literatureBody(p, lit) : `<div class="empty">${isOverviewMap(id) ? 'Literature support is shown for drawn pathway maps; overview maps are not drawn.' : 'Literature support is not available for this pathway.'}</div>`;
 }
 async function exportLiterature() {
-  const d = state.data, cols = ['pathway_id', 'pathway_name', 'connection_index', 'metabolite_a', 'metabolite_b', 'kegg_reactions', 'enzyme_genes', 'highest_cell_type', 'second_cell_type', 'specificity_margin_z', 'human_pancreas_papers', 'papers_in_highest_cell_type', 'expected_papers_in_highest_cell_type', 'enrichment', 'human_pancreas_papers_incl_cancer', 'papers_in_highest_cell_type_incl_cancer', 'curated_enzyme_papers', 'recent_pmids_human_pancreas', 'recent_pmids_highest_cell_type', 'curated_pmids', 'candidate_hypothesis', 'absence_informative'];
+  const d = state.data, cols = ['pathway_id', 'pathway_name', 'connection_index', 'metabolite_a', 'metabolite_b', 'kegg_reactions', 'enzyme_genes', 'highest_cell_type', 'second_cell_type', 'specificity_margin_z', 'human_pancreas_papers', 'papers_in_highest_cell_type', 'expected_papers_in_highest_cell_type', 'enrichment', 'human_pancreas_papers_incl_cancer', 'papers_in_highest_cell_type_incl_cancer', 'curated_enzyme_papers', 'recent_pmids_human_pancreas', 'recent_pmids_highest_cell_type', 'curated_pmids', 'candidate_hypothesis'];
   const q = v => { const t = v === null || v === undefined ? '' : String(v); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
   const lines = [cols.join(',')];
   for (const p of d.pathways) {
     const lit = await getLiterature(p.id); if (!lit) continue;
     for (const c of lit.connections || [])
-      lines.push([p.id, p.name, c.i, c.a, c.b, c.reactions, (c.genes || []).join(';'), c.top, c.second, c.margin, c.pancreas, c.cell, c.expected, c.enrichment, c.pancreasInclCancer, c.cellInclCancer, c.curated, (c.pancreasPmids || []).join(';'), (c.cellPmids || []).join(';'), (c.curatedPmids || []).join(';'), c.hypothesis ? 'True' : 'False', c.informativeAbsence ? 'True' : 'False'].map(q).join(','));
+      lines.push([p.id, p.name, c.i, c.a, c.b, c.reactions, (c.genes || []).join(';'), c.top, c.second, c.margin, c.pancreas, c.cell, c.expected, c.enrichment, c.pancreasInclCancer, c.cellInclCancer, c.curated, (c.pancreasPmids || []).join(';'), (c.cellPmids || []).join(';'), (c.curatedPmids || []).join(';'), c.hypothesis ? 'True' : 'False'].map(q).join(','));
   }
   if (lines.length === 1) return toast('No literature support is available for this result.');
   download('cellaris-literature-support.csv', lines.join('\n'));
