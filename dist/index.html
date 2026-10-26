@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Cellaris AI Demo · Single-cell metabolic profiling from bulk RNA-seq</title>
-  <meta name="description" content="Cellaris AI Demo: reconstruct cell-type composition, single-cell expression profiles and metabolic pathway activity from human pancreatic bulk RNA-seq.">
+  <meta name="description" content="Cellaris AI Demo: estimate cell-type composition, single-cell expression profiles, metabolic and signaling pathway activity, and group comparisons from human pancreatic bulk RNA-seq.">
   <meta name="theme-color" content="#0b1f33">
   <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="styles.css">
@@ -20,14 +20,17 @@
       <div class="nav-section">Analysis</div>
       <button class="nav-item" data-view="overview"><i data-icon="overview"></i>Overview</button>
       <button class="nav-item" data-view="samples"><i data-icon="samples"></i>Samples</button>
-      <button class="nav-item" data-view="pathways"><i data-icon="pathways"></i>Pathways<span class="nav-count" id="pathway-count"></span></button>
+      <button class="nav-item" data-view="pathways"><i data-icon="pathways"></i>Metabolic pathways<span class="nav-count" id="pathway-count"></span></button>
+      <button class="nav-item" data-view="signaling"><i data-icon="signaling"></i>Signaling pathways</button>
+      <button class="nav-item" data-view="compare"><i data-icon="compare"></i>Compare groups</button>
       <button class="nav-item" data-view="genes"><i data-icon="genes"></i>Gene expression</button>
       <div class="nav-section">Report</div>
       <button class="nav-item" data-view="figures"><i data-icon="figures"></i>Figures</button>
       <button class="nav-item" data-view="about"><i data-icon="methods"></i>About</button>
     </nav>
     <div class="sidebar-footer">
-      <div class="dataset-card"><div class="label">Dataset</div><b id="dataset-name"></b><small id="dataset-meta"></small></div>
+      <div class="dataset-card"><div class="label">Dataset</div><b id="dataset-name"></b><small id="dataset-meta"></small>
+        <select class="select demo-select" id="demo-select" aria-label="Demo dataset"><option value="islets">Demo: islet donors (GSE50244)</option><option value="pannet">Demo: PanNET vs adjacent pancreas (GSE281039)</option><option value="" disabled hidden>Your analysis</option></select></div>
       <button class="worker-status" data-action="worker"><span class="dot"></span><span id="worker-label">Workspace not connected</span></button>
       <button class="link-btn" data-action="import">Import results (JSON)</button>
     </div>
