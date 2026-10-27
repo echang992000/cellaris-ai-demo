@@ -236,8 +236,11 @@ details.advanced summary{cursor:pointer;font-weight:600;font-size:13px}
 /* Signaling pathways, group comparison, demo picker */
 .banner.warn{border-color:#f9dbaf;background:var(--warn-soft);color:var(--warn)}
 .banner.warn svg{flex:none;width:18px;height:18px}
-.banner-actions{margin-left:auto;flex-wrap:nowrap}
+.banner{flex-wrap:wrap}
+.banner > div:not(.banner-actions){flex:1 1 280px;min-width:0}
+.banner-actions{margin-left:auto;flex-wrap:wrap;justify-content:flex-end}
 .banner-actions .btn{margin-left:0}
+@media (max-width:760px){.banner-actions{margin-left:0;width:100%;justify-content:flex-start}}
 .alert.warn{background:var(--warn-soft);color:var(--warn)}
 .badge.ok{background:#ecfdf3;color:var(--ok)}
 .badge.muted{background:var(--line-2);color:var(--ink-3)}
