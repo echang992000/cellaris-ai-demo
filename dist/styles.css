@@ -237,6 +237,7 @@ details.advanced summary{cursor:pointer;font-weight:600;font-size:13px}
 .banner.warn{border-color:#f9dbaf;background:var(--warn-soft);color:var(--warn)}
 .banner.warn svg{flex:none;width:18px;height:18px}
 .banner{flex-wrap:wrap}
+.banner > svg{flex:0 0 18px;width:18px;height:18px;margin-top:1px}
 .banner > div:not(.banner-actions){flex:1 1 280px;min-width:0}
 .banner-actions{margin-left:auto;flex-wrap:wrap;justify-content:flex-end}
 .banner-actions .btn{margin-left:0}
