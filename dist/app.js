@@ -817,6 +817,7 @@ const GENESET_CREDITS = [
   ['WikiPathways (MSigDB C2:CP:WikiPathways)', 'Release 2026-10-10', 'CC0 1.0 (WikiPathways); CC BY 4.0 (MSigDB)', 'Agrawal et al., Nucleic Acids Research 2024', '10.1093/nar/gkad960'],
   ['Gene Ontology, Biological Process (MSigDB C5:GO:BP)', 'GO release 2026-07-26', 'CC BY 4.0', 'Ashburner et al., Nature Genetics 2000; The Gene Ontology Consortium, Genetics 2023. GO data archive (concept DOI; no version DOI is listed for the 2026-07-26 release):', ['10.1038/75556', '10.1093/genetics/iyad031', '10.5281/zenodo.1205166']],
   ['PROGENy pathway-responsive genes', 'model_human_full, 500 genes per pathway', 'Apache-2.0', 'Schubert et al., Nature Communications 2018', '10.1038/s41467-017-02391-6'],
+  ['Cross-database consistency labels, computed from public human islet single-cell RNA-seq data', 'Gene-set library 1.0.0', 'ArrayExpress and GEO public data; GSE85241 cell-type labels CC BY 4.0', 'Segerstolpe et al., Cell Metabolism 2016 (E-MTAB-5061); Muraro et al., Cell Systems 2016 (GSE85241; cell-type labels from Abdelaal et al. 2019); Lawlor et al., Genome Research 2017 (GSE86469):', ['10.1016/j.cmet.2016.08.020', '10.1016/j.cels.2016.09.002', '10.5281/zenodo.3357167', '10.1101/gr.212720.116']],
 ];
 
 /* ---------- Modals ---------- */
