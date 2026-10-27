@@ -64,7 +64,10 @@ const state = {
   job: null, polling: false, bulk: null, bulkInfo: null,
 };
 const DEMO = () => state.demoRaw || window.CELLARIS_DEMO || {};
-const DEMOS = { islets: { label: 'Islet donors (GSE50244)' }, pannet: { label: 'PanNET vs adjacent pancreas (GSE281039)', url: 'demos/pannet.json' } };
+const DEMOS = { islets: { label: 'Islet donors (GSE50244)', short: 'Islet donor demo' },
+  pannet: { label: 'PanNET vs adjacent pancreas (GSE281039)', url: 'demos/pannet.json', short: 'PanNET demo', comparison: true },
+  pdac: { label: 'PDAC vs adjacent pancreas (CPTAC-3)', url: 'demos/pdac.json', short: 'PDAC demo', comparison: true } };
+const otherDemos = () => Object.keys(DEMOS).filter(k => k !== state.demoKey);
 /* Files published on the public site; link to the public copies when the page is served elsewhere. */
 const PUBLIC_SITE = 'https://echang992000.github.io/cellaris-ai-demo/';
 const publicFile = path => (location.hostname.endsWith('github.io') ? '' : PUBLIC_SITE) + path;
@@ -170,9 +173,9 @@ function viewOverview() {
   const d = state.data, comp = meanComposition(d), c = d.comparison;
   const isDemo = d.origin === 'demo';
   const samples = [...new Set(d.cells.map(x => x.sample))];
-  const other = state.demoKey === 'pannet' ? ['islets', 'Islet donor demo'] : ['pannet', 'Comparison demo'];
+  const others = otherDemos().map(k => `<button class="btn btn-secondary" data-demo="${k}">${esc(DEMOS[k].short)}</button>`).join('');
   const banner = isDemo
-    ? `<div class="banner">${icon('info')}<div><b>Demo dataset.</b> ${esc(DEMO().bannerText || 'Public data analyzed with Cellaris.')}</div><div class="controls banner-actions"><button class="btn btn-secondary" data-demo="${other[0]}">${other[1]}</button><button class="btn btn-primary" data-action="new">Analyze your data</button></div></div>`
+    ? `<div class="banner">${icon('info')}<div><b>Demo dataset.</b> ${esc(DEMO().bannerText || 'Public data analyzed with Cellaris.')}</div><div class="controls banner-actions">${others}<button class="btn btn-primary" data-action="new">Analyze your data</button></div></div>`
     : `<div class="banner">${icon('info')}<div><b>${d.origin === 'job' ? 'Computed analysis.' : 'Imported analysis.'}</b> Results for ${esc(d.title)} from your Cellaris workspace.</div><button class="btn btn-secondary" data-action="demo">Return to demo</button></div>`;
   const nSets = d.genesets ? Object.values(d.genesets.collections).reduce((a, k) => a + (k.shownSets || 0), 0) : null;
   const kpis = [
@@ -635,14 +638,15 @@ function viewCompare() {
     const st = d.lazy.comparison;
     if (d.comparisonUrl && !String(st || '').startsWith('error')) { ensureLazy('comparison', checkComparison); return `${pageHead('Comparison', 'Compare groups', intro)}<div class="card"><div class="empty">Loading the comparison…</div></div>`; }
     return `${pageHead('Comparison', 'Compare groups', intro)}<section class="card"><div class="card-body prose"><p>${st ? `The comparison could not be loaded (${esc(st.replace(/^error: /, ''))}).` : 'This analysis does not include a group comparison.'}</p>
-      <p>To compare groups, choose <b>New analysis</b>, upload your counts, open <b>Compare two groups</b> and assign samples to a test group and a reference group (at least 2 samples each). The comparison demo shows an example with pancreatic neuroendocrine tumors and adjacent pancreas.</p>
-      <div class="controls"><button class="btn btn-primary" data-action="new">New analysis</button>${state.demoKey !== 'pannet' ? '<button class="btn btn-secondary" data-demo="pannet">Open the comparison demo</button>' : ''}</div></div></section>`;
+      <p>To compare groups, choose <b>New analysis</b>, upload your counts, open <b>Compare two groups</b> and assign samples to a test group and a reference group (at least 2 samples each). The comparison demos show examples with pancreatic tumors and adjacent pancreas: pancreatic neuroendocrine tumors (PanNET) and pancreatic ductal adenocarcinoma (PDAC).</p>
+      <div class="controls"><button class="btn btn-primary" data-action="new">New analysis</button>${otherDemos().filter(k => DEMOS[k].comparison).map(k => `<button class="btn btn-secondary" data-demo="${k}">Open the ${esc(DEMOS[k].short)}</button>`).join('')}</div></div></section>`;
   }
   const de = c.de, s = de.summary || {};
   const kpis = [[c.test, de.nTest, 'Samples in the test group'], [c.reference, de.nReference, 'Samples in the reference group'], ['Genes tested', s.n_padj_defined ?? s.n_genes_tested, `${num(de.genesAfterFilter)} genes passed the expression filter`],
     ['Differentially expressed genes', s.n_sig, `Adjusted p < 0.05: ${num(s.n_sig_up)} higher and ${num(s.n_sig_down)} lower in ${c.test}`]]
     .map(([k, v, f]) => `<div class="card kpi"><div class="k-label">${esc(k)}</div><div class="k-value">${num(v)}</div><div class="k-foot">${esc(f)}</div></div>`).join('');
-  const notices = (c.notices || []).map(n => `<div class="alert warn">${esc(n)}</div>`).join('');
+  const notices = (c.notices || []).map(n => `<div class="alert warn">${esc(n)}</div>`).join('')
+    + (d.origin === 'demo' && DEMO().compareNote ? `<div class="banner" role="note" id="compare-note">${icon('info')}<div>${esc(DEMO().compareNote)}</div></div>` : '');
   const sf = de.sizeFactors?.chosen === 'positive counts' ? 'size factors from positive counts (many genes have zero counts in some samples)' : 'median-of-ratios size factors';
   return `${pageHead('Comparison', `${c.test} vs ${c.reference}`, intro, `<div class="controls"><button class="btn btn-secondary" data-action="exportde">${icon('download')} Genes (CSV)</button><button class="btn btn-secondary" data-action="exportenrich">${icon('download')} Pathways (CSV)</button></div>`)}
   ${oodBanner(d)}${notices}
@@ -1193,7 +1197,7 @@ async function openDemo(key = 'islets', view = null) {
     if (key !== 'islets') { const r = await fetch(DEMOS[key].url); if (!r.ok) throw new Error(`HTTP ${r.status}`); raw = await r.json(); }
     state.demoRaw = raw; state.demoKey = key; state.job = state.polling ? state.job : null; loadDemo();
     history.replaceState(null, '', `${key === 'islets' ? location.pathname : `?demo=${key}`}${location.hash}`);
-    setView(view || (key === 'pannet' ? 'compare' : 'overview'));
+    setView(view || (DEMOS[key].comparison ? 'compare' : 'overview'));
   } catch (e) { toast(`The demo could not be loaded (${e.message}).`); render(); }
 }
 function exportWorkspace() {
