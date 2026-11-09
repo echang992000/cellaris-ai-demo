@@ -263,3 +263,133 @@ svg.svgplot{width:100%;height:auto;display:block}
 .gs-table .heat{min-width:52px}
 .demo-select{width:100%;margin-top:8px;font-size:12px;padding:5px 8px}
 .check.full{grid-column:1/-1}
+
+/* ---------- PDAC demo additions: sortable tables, master-detail layout, literature, figures ---------- */
+.section-title{font-size:15px;font-weight:650;margin:28px 0 10px;color:var(--ink)}
+.lead{font-size:13.5px;color:var(--ink-2);margin:0 0 12px;line-height:1.55}
+.split{display:grid;grid-template-columns:minmax(0,1fr) minmax(340px,420px);gap:16px;align-items:start}
+.split.wide-left{grid-template-columns:minmax(0,1fr) minmax(340px,400px)}
+.split>.card,.split>.col-stack{min-width:0}
+.col-stack{display:flex;flex-direction:column;gap:16px;min-width:0}
+.detail{position:sticky;top:12px;max-height:calc(100vh - 24px);overflow:auto;min-width:0;border-radius:var(--radius)}
+.detail .card{box-shadow:var(--shadow)}
+.detail .svgplot{max-width:100%}
+.detail-sub{border-top:1px solid var(--line-2);margin-top:14px;padding-top:4px}
+.table-wrap.tall{max-height:620px}
+/* sortable column headers */
+th.sortable{padding:0!important;vertical-align:bottom}
+.th-sort{display:flex;align-items:flex-end;gap:4px;width:100%;border:0;background:none;padding:9px 10px;font:inherit;font-weight:inherit;color:inherit;text-align:left;cursor:pointer;line-height:1.3;white-space:normal}
+th.num .th-sort{justify-content:flex-end;text-align:right}
+.th-sort:hover{color:var(--ink);background:var(--line-2)}
+.th-sort:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.sort-ind{display:inline-block;width:9px;flex:none;color:var(--ink-4);font-size:10px}
+.sort-ind::before{content:"\2195";opacity:.55}
+th.asc .sort-ind::before{content:"\25B2";opacity:1;color:var(--accent)}
+th.desc .sort-ind::before{content:"\25BC";opacity:1;color:var(--accent)}
+th.asc,th.desc{color:var(--ink)}
+.lit-table .table th.sortable{padding:0!important}
+.lit-table .th-sort{padding:8px;font-size:11px}
+/* clickable names in tables */
+.name-link{display:inline;border:0;background:none;padding:0;font:inherit;font-weight:600;color:var(--accent);text-align:left;cursor:pointer}
+.name-link:hover{text-decoration:underline}
+.name-link.gene{font-style:italic}
+tr.clickable{cursor:pointer}
+tr.selected td{background:var(--accent-soft)}
+tr.selected td:first-child{box-shadow:inset 3px 0 0 var(--accent)}
+/* metrics variants */
+.metrics.small{grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.metrics.small .metric b{font-size:14.5px}
+.metrics.four{grid-template-columns:repeat(4,minmax(0,1fr))}
+.metrics.five{grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}
+.metric .of{display:inline}
+.metrics.four .metric>.of{display:block;margin-top:2px}
+/* sample detail: median marker on bars */
+.hbar.med .track{position:relative;overflow:visible}
+.hbar.med em{position:absolute;top:-3px;width:2px;height:16px;margin-left:-1px;background:var(--ink);border-radius:1px}
+g.bar-sample{cursor:pointer}
+g.bar-sample:hover{opacity:1}
+svg.embedding.mini{max-width:440px}
+/* overview composition */
+.comp-group{margin:0 0 12px}
+.comp-label{display:flex;align-items:center;gap:6px;font-size:12.5px;margin:0 0 4px}
+.comp-label small{color:var(--ink-3)}
+.comp-table{margin-top:12px;font-size:12.5px}
+/* key terms */
+.terms{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 20px;margin:0}
+.glossary.compact .terms{grid-template-columns:1fr}
+.terms dt{font-weight:650;font-size:13px;color:var(--ink)}
+.terms dd{margin:2px 0 0;color:var(--ink-2);font-size:12.5px;line-height:1.5}
+/* heatmap */
+.heatmap-frame{width:100%;min-height:320px}
+/* gene-set source and method */
+.source-card .table.compact td small{display:block}
+.table.compact{font-size:12.5px}
+.table.compact td,.table.compact th{padding:6px 8px}
+.method-steps ol{margin:0;padding-left:18px}
+.method-steps li{margin:0 0 6px;font-size:12.5px;color:var(--ink-2)}
+.source-line{display:flex;gap:8px;align-items:flex-start;font-size:12.5px;color:var(--ink-2);background:var(--line-2);border-radius:var(--radius-sm);padding:8px 10px;margin:0 0 12px}
+.source-line svg{width:16px;height:16px;flex:none;margin-top:2px;color:var(--ink-3)}
+.topgenes td{vertical-align:top}
+.badge.db-h{background:#eef4ff;color:#3538cd;border-color:#c7d7fe}
+.badge.db-progeny{background:#fdf2fa;color:#c11574;border-color:#fcceee}
+.badge.db-reactome{background:#ecfdf3;color:#067647;border-color:#abefc6}
+.badge.db-wikipathways{background:#fef6ee;color:#b93815;border-color:#f9dbaf}
+.badge.db-gobp{background:#f4f3ff;color:#5925dc;border-color:#d9d6fe}
+.method-card summary{font-weight:600}
+.plain{margin:0;padding-left:18px}
+.plain li{margin:0 0 6px;font-size:12.5px;color:var(--ink-2)}
+.methods h4{font-size:13px;margin:12px 0 4px}
+.methods h4:first-child{margin-top:0}
+.methods p{margin:0 0 6px;font-size:12.5px;color:var(--ink-2);line-height:1.55}
+/* literature support */
+.status{display:inline-block;font-size:11px;font-weight:600;line-height:1.3;padding:2px 7px;border-radius:999px;border:1px solid var(--line);background:var(--line-2);color:var(--ink-2);white-space:normal}
+.status.s-hyp{background:#fef6ee;color:#b54708;border-color:#f9dbaf}
+.status.s-cell{background:#ecfdf3;color:#067647;border-color:#abefc6}
+.status.s-scope{background:#eef4ff;color:#3538cd;border-color:#c7d7fe}
+.status.s-other{background:#f9fafb;color:#475467}
+.status.s-unstudied{background:#fff;color:#667085}
+.status.s-none{background:#fff;color:#98a2b3;border-style:dashed}
+.lit-table col.c-status{width:11%}
+.lit-table td small{display:block;color:var(--ink-3);font-size:11px;margin-top:2px}
+.papers{margin:0;padding-left:20px;font-size:12.5px}
+.papers li{margin:0 0 6px;line-height:1.4}
+.papers li small{display:block;color:var(--ink-3);font-size:11.5px}
+.step-detail{margin:14px 0 0;border:1px solid var(--accent-line);background:#fbfefd;border-radius:var(--radius-sm);padding:12px 14px}
+.step-head{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;margin:0 0 6px}
+.lit-defs{margin:16px 0 0}
+.lit-defs summary{cursor:pointer;font-weight:600;font-size:13px}
+.lit-defs dl{margin:10px 0 0;display:grid;grid-template-columns:minmax(150px,220px) 1fr;gap:6px 16px;font-size:12.5px}
+.lit-defs dt{font-weight:600;color:var(--ink)}
+.lit-defs dd{margin:0;color:var(--ink-2)}
+/* figures */
+.figure-list{display:flex;flex-direction:column;gap:16px;margin-top:16px}
+.figure-row{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(260px,1fr);gap:20px;align-items:start}
+.figure-img img{width:100%;height:auto;border:1px solid var(--line);border-radius:var(--radius-sm);cursor:zoom-in;background:#fff}
+.figure-notes{display:flex;flex-direction:column;gap:10px}
+.fnote{border-left:3px solid var(--line);padding:2px 0 2px 12px}
+.fnote h4{font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-3);margin:0 0 4px}
+.fnote p{margin:0;font-size:13px;line-height:1.55;color:var(--ink-2)}
+.fnote.finding{border-left-color:var(--accent)}
+.fnote.caveat{border-left-color:#f79009}
+@media (max-width:1180px){
+  .split,.split.wide-left{grid-template-columns:1fr}
+  .detail{position:static;max-height:none;overflow:visible}
+  .figure-row{grid-template-columns:1fr}
+  .metrics.five{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .metrics.four{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .terms{grid-template-columns:1fr}
+}
+@media (max-width:640px){
+  .metrics.five,.metrics.small{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .lit-defs dl{grid-template-columns:1fr}
+}
+
+.gs-table td:first-child{min-width:190px;max-width:260px}
+.gs-table td small,.table td small{overflow-wrap:anywhere}
+.gs-table .heat{min-width:44px}
+.prose.two-col{column-count:2;column-gap:28px}
+.prose.two-col p,.prose.two-col ul{break-inside:avoid;margin-top:0}
+@media (max-width:1180px){.prose.two-col{column-count:1}}
+
+.grid>*{min-width:0}
+svg.svgplot{max-width:100%;height:auto}

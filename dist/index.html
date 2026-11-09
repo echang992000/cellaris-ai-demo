@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Cellaris AI Demo · Single-cell metabolic profiling from bulk RNA-seq</title>
-  <meta name="description" content="Cellaris AI Demo: estimate cell-type composition, single-cell expression profiles, metabolic and signaling pathway activity, and group comparisons from human pancreatic bulk RNA-seq.">
+  <title>Cellaris AI Demo · PDAC cell-type and metabolic profiling from bulk RNA-seq</title>
+  <meta name="description" content="Cellaris AI Demo: cell-type composition, estimated single-cell profiles, metabolic and signaling pathway activity, literature support and a tumor-versus-adjacent comparison for pancreatic ductal adenocarcinoma (PDAC) bulk RNA-seq.">
   <meta name="theme-color" content="#0b1f33">
   <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="styles.css">
@@ -30,7 +30,7 @@
     </nav>
     <div class="sidebar-footer">
       <div class="dataset-card"><div class="label">Dataset</div><b id="dataset-name"></b><small id="dataset-meta"></small>
-        <select class="select demo-select" id="demo-select" aria-label="Demo dataset"><option value="islets">Demo: islet donors (GSE50244)</option><option value="pannet">Demo: PanNET vs adjacent pancreas (GSE281039)</option><option value="pdac">Demo: PDAC vs adjacent pancreas (CPTAC-3)</option><option value="" disabled hidden>Your analysis</option></select></div>
+        <button class="btn btn-secondary btn-block hidden" id="demo-return" data-action="demo">Return to the PDAC demo</button></div>
       <button class="worker-status" data-action="worker"><span class="dot"></span><span id="worker-label">Workspace not connected</span></button>
       <button class="link-btn" data-action="import">Import results (JSON)</button>
     </div>
