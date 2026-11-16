@@ -890,8 +890,10 @@ async function ensureLazy(key, check) {
   } catch (e) { d.lazy[key] = `error: ${e.message}`; }
   if (state.data === d) rerender();
 }
+/* Notice for samples that the healthy reference describes poorly. Not shown on the public demo, where each sample's
+   fit stays in the Samples table and in Compare groups; shown for analyses of a user's own data. */
 function oodBanner(d) {
-  const comp = d.comparison?.composition; if (!comp?.banner) return '';
+  const comp = d.comparison?.composition; if (!comp?.banner || d.origin === 'demo') return '';
   const counts = Object.entries(comp.bannerCounts || {}).map(([g, t]) => `${esc(t)} ${esc(g)}`).join('; ');
   return `<div class="banner warn" role="note">${icon('info')}<div><b>Samples outside the healthy reference.</b> ${esc(comp.banner)}${counts ? ` Flagged samples: ${counts}.` : ''}</div></div>`;
 }

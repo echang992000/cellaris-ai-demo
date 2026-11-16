@@ -30,8 +30,8 @@ Analyses of your own data run in a Cellaris workspace; contact Cellaris for a wo
   set, the scoring method, the top genes in each cell type and an indicator of agreement across databases
 - Group comparison (PDAC vs adjacent pancreas): differential expression with a volcano plot (every
   tested gene shows its mean normalized count and per-sample expression when selected), pathway
-  enrichment, signaling pathway activity and composition by group, with a notice for samples that lie
-  outside the healthy pancreas reference
+  enrichment, signaling pathway activity and composition by group, with each sample's fit to the
+  healthy pancreas reference
 - Marker gene expression by cell type, with bulk expression by group
 - Figures with reading guides, and downloadable result tables
 
