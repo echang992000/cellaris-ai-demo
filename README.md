@@ -15,17 +15,21 @@ Analyses of your own data run in a Cellaris workspace; contact Cellaris for a wo
 ## What the demo shows
 
 - Estimated cell-type composition of each sample, with patient, stage, grade, sex and age (sortable)
-- Two maps of the estimated single-cell profiles, by metabolic activity and by gene expression, and a
-  guide to how they differ
-- Activity of 83 human KEGG metabolic pathways by cell type: a heatmap grouped by category with a
-  description of each pathway, and interactive pathway maps
+- Two maps of the estimated single-cell profiles, by gene expression (shown first) and by metabolic
+  activity, with a filter that shows the profiles of all samples, PDAC only or adjacent pancreas only,
+  and a guide to how the maps differ. Each layout is fitted to one averaged profile per distinct
+  reference cell, so profiles that derive from the same reference cell do not form separate islands
+- Activity of 83 human KEGG metabolic pathways by cell type: a heatmap grouped by category that outlines
+  the pathway and cell type under the pointer and keeps the selected ones outlined, a description of
+  each pathway, and interactive pathway maps
 - Literature support for every reaction step on a pathway map: human pancreatic cancer papers on its
   enzymes, papers in the most specific cell type, curated enzyme evidence, recent paper titles and
   candidate hypotheses (predicted, not yet reported)
 - Signaling and functional pathways: activity of MSigDB Hallmark, PROGENy, Reactome, WikiPathways and
   GO Biological Process gene sets in each cell type and sample, with the database and version of every
   set, the scoring method, the top genes in each cell type and an indicator of agreement across databases
-- Group comparison (PDAC vs adjacent pancreas): differential expression with a volcano plot, pathway
+- Group comparison (PDAC vs adjacent pancreas): differential expression with a volcano plot (every
+  tested gene shows its mean normalized count and per-sample expression when selected), pathway
   enrichment, signaling pathway activity and composition by group, with a notice for samples that lie
   outside the healthy pancreas reference
 - Marker gene expression by cell type, with bulk expression by group

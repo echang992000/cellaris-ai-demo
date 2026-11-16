@@ -36,7 +36,7 @@ const FALLBACK = ['#4e79a7', '#f28e2b', '#59a14f', '#b07aa1', '#76b7b2', '#edc94
 const typeLabel = n => TYPE_STYLE[n]?.[0] || String(n).replace(/_/g, ' ').replace(/^./, c => c.toUpperCase());
 const typeColor = (n, i = 0) => TYPE_STYLE[n]?.[1] || FALLBACK[i % FALLBACK.length];
 const typeNoun = n => { const l = typeLabel(n); return /^[A-Z]{2}/.test(l) ? l : l.charAt(0).toLowerCase() + l.slice(1); };
-const VIEWS = { overview: 'Overview', samples: 'Samples', pathways: 'Metabolic pathways', signaling: 'Signaling pathways', compare: 'Compare groups', genes: 'Gene expression', figures: 'Figures', about: 'About' };
+const VIEWS = { overview: 'Overview', samples: 'Samples', genes: 'Gene expression', compare: 'Compare groups', signaling: 'Signaling pathways', pathways: 'Metabolic pathways', figures: 'Figures', about: 'About' };
 const SCHEDULES = {
   quick: { label: 'Quick', note: 'Fastest; suited to a first look', t1: 300, t2: 100 },
   standard: { label: 'Standard', note: 'Recommended for final results', t1: 1000, t2: 1000 },
@@ -57,7 +57,7 @@ function runtimeEstimate() {
 function updateEstimate() { const el = $('#runtime-estimate'); if (el) el.textContent = runtimeEstimate(); }
 
 const state = {
-  data: null, view: 'overview', colorBy: 'type', mapSpace: 'metabolic', sample: 'all', hidden: new Set(), pathway: null,
+  data: null, view: 'overview', colorBy: 'type', mapSpace: 'expression', sample: 'all', group: 'all', hidden: new Set(), pathway: null, heatType: null,
   search: '', category: 'all', gene: null, selSample: null, heatAll: false, heatScale: 'z',
   gs: { on: new Set(['H', 'PROGENY']), search: '', set: null, limit: 60 },
   cmp: { collection: 'H', setSearch: '', setLimit: 40, geneSearch: '', geneLimit: 60, gene: null, set: null, comp: null },
@@ -156,6 +156,7 @@ function prepare(raw, origin) {
     metabolic: result.metadata?.metabolicModel !== false, genesets, genesetsUrl: raw.genesetsUrl || null, comparison, comparisonUrl: raw.comparisonUrl || null,
     pathwayInfo: raw.pathwayInfo || {}, mapComparison: raw.mapComparison || null, glossary: raw.glossary || null,
     bulkExpression: raw.bulkExpression || result.bulkExpression || null, typeExpression: raw.typeExpression || result.typeExpression || null,
+    bulkAllUrl: raw.bulkAllUrl || null, bulkAll: null,
     download: raw.download || null, lazy: {},
   };
 }
@@ -179,6 +180,9 @@ function heat(v, lo, hi) {
 }
 const groupNames = d => d.comparison ? [d.comparison.test, d.comparison.reference] : [];
 const groupColor = (d, g) => { const i = groupNames(d).indexOf(g); return i >= 0 ? GROUP_COLOR[i] : '#667085'; };
+/* Group of samples shown on the overview map ('all' or one of the two compared groups). Display filter only. */
+const mapGroup = d => (groupNames(d).includes(state.group) ? state.group : 'all');
+const inMapGroup = (d, sampleId) => { const g = mapGroup(d); return g === 'all' || d.comparison?.samples?.[sampleId] === g; };
 
 /* ---------- Layout ---------- */
 function setView(view) {
@@ -207,7 +211,7 @@ function render() {
   if (state.view === 'overview') drawEmbedding();
   if (state.view === 'samples') drawEmbedding('.embedding.mini', { sampleOnly: state.selSample });
   if (state.view === 'pathways' && d.metabolic) { drawPathwayHeatmap(); loadPathwayMap(); loadLiterature(); }
-  if (state.view === 'compare' && d.comparison) drawVolcano();
+  if (state.view === 'compare' && d.comparison) { drawVolcano(); loadBulkAll(); }
 }
 
 /* ---------- Shared: key terms ---------- */
@@ -235,6 +239,9 @@ function glossary(d, { compact = false } = {}) {
 function viewOverview() {
   const d = state.data, c = d.comparison, isDemo = d.origin === 'demo', f = cohortFacts(d);
   const samples = [...new Set(d.cells.map(x => x.sample))];
+  const mapGroups = groupNames(d).filter(g => samples.some(s => d.comparison?.samples?.[s] === g)), mg = mapGroup(d);
+  const shownSamples = samples.filter(s => inMapGroup(d, s)), shownCells = mg === 'all' ? d.cells.length : d.cells.filter(x => inMapGroup(d, x.sample)).length;
+  if (state.sample !== 'all' && !shownSamples.includes(state.sample)) state.sample = 'all';
   const banner = isDemo
     ? `<div class="banner">${icon('info')}<div><b>Demo dataset.</b> ${esc(DEMO().bannerText || 'Public data analyzed with Cellaris.')}</div><div class="controls banner-actions"><button class="btn btn-primary" data-action="new">Analyze your data</button></div></div>`
     : `<div class="banner">${icon('info')}<div><b>${d.origin === 'job' ? 'Computed analysis.' : 'Imported analysis.'}</b> Results for ${esc(d.title)} from your Cellaris workspace.</div><button class="btn btn-secondary" data-action="demo">Return to the PDAC demo</button></div>`;
@@ -251,12 +258,13 @@ function viewOverview() {
   const hasExpr = d.cells.some(x => Number.isFinite(x.ex));
   const space = hasExpr && state.mapSpace === 'expression' ? 'expression' : 'metabolic';
   const mapCard = d.metabolic ? `<section class="card"><div class="card-head"><div><div class="card-title">${space === 'expression' ? 'Expression map' : 'Metabolic map'}</div><div class="card-sub">Each point is one estimated single-cell profile, placed by ${space === 'expression' ? 'similarity of gene expression' : 'similarity of estimated metabolic activity'} (UMAP; axes have no units)</div></div>
-      <div class="controls">${hasExpr ? `<div class="segmented" role="group" aria-label="Map"><button class="${space === 'metabolic' ? 'active' : ''}" data-space="metabolic">Metabolic</button><button class="${space === 'expression' ? 'active' : ''}" data-space="expression">Expression</button></div>` : ''}
+      <div class="controls">${hasExpr ? `<div class="segmented" role="group" aria-label="Map"><button class="${space === 'expression' ? 'active' : ''}" data-space="expression">Expression</button><button class="${space === 'metabolic' ? 'active' : ''}" data-space="metabolic">Metabolic</button></div>` : ''}
       <div class="segmented" role="group" aria-label="Color"><button class="${state.colorBy === 'type' ? 'active' : ''}" data-color="type">Cell type</button><button class="${state.colorBy === 'score' ? 'active' : ''}" data-color="score">Metabolic activity</button></div>
-      <select class="select" id="sample-select" aria-label="Show the profiles of one sample"><option value="all">All samples</option>${samples.map(s => `<option value="${esc(s)}" ${state.sample === s ? 'selected' : ''}>${esc(sampleLabel(s))}</option>`).join('')}</select></div></div>
+      ${mapGroups.length ? `<div class="segmented" role="group" aria-label="Samples shown on the map"><button class="${mg === 'all' ? 'active' : ''}" data-mapgroup="all">All samples</button>${mapGroups.map(g => `<button class="${mg === g ? 'active' : ''}" data-mapgroup="${esc(g)}">${esc(g)}</button>`).join('')}</div>` : ''}
+      <select class="select" id="sample-select" aria-label="Show the profiles of one sample"><option value="all">${mg === 'all' ? 'All samples' : `All ${esc(mg)} samples`}</option>${shownSamples.map(s => `<option value="${esc(s)}" ${state.sample === s ? 'selected' : ''}>${esc(sampleLabel(s))}</option>`).join('')}</select></div></div>
       <div class="card-body"><div class="embed-wrap"><svg class="embedding main" viewBox="0 0 640 400" data-w="640" data-h="400" role="img" aria-label="Map of estimated single-cell profiles"></svg><div class="tip hidden"></div></div>
       <div class="legend">${d.cellTypes.map(t => `<button class="${state.hidden.has(t.name) ? 'off' : ''}" data-type="${esc(t.name)}"><span class="swatch" style="background:${t.color}"></span>${esc(t.label)}</button>`).join('')}</div></div>
-      <div class="card-foot"><span>${d.cells.length < d.counts.cells ? `Showing ${num(d.cells.length)} of ${num(d.counts.cells)} estimated profiles (a random subset)` : `Showing all ${num(d.cells.length)} estimated profiles`}${hasExpr ? ' · both maps show the same profiles' : ''}</span>${d.figures.length ? '<button class="link-btn" data-view="figures">How to read this map →</button>' : '<span>Select a cell type to hide it</span>'}</div></section>`
+      <div class="card-foot"><span id="map-count">${mg === 'all' ? (d.cells.length < d.counts.cells ? `Showing ${num(d.cells.length)} of ${num(d.counts.cells)} estimated profiles (a random subset)` : `Showing all ${num(d.cells.length)} estimated profiles`) : `Showing ${num(shownCells)} of the ${num(d.cells.length)} displayed profiles: those estimated from the ${num(shownSamples.length)} ${esc(mg)} samples. The filter changes the map only; cell-type values on this site summarize all samples.`}${hasExpr && mg === 'all' ? ' · both maps show the same profiles' : ''}</span>${d.figures.length ? '<button class="link-btn" data-view="figures">How to read this map →</button>' : '<span>Select a cell type to hide it</span>'}</div></section>`
     : `<section class="card"><div class="card-head"><div><div class="card-title">${c ? 'Group comparison' : 'Analysis without the metabolic model'}</div></div></div><div class="card-body prose"><p>The metabolic model was not run for this analysis, so KEGG pathway activity, the metabolic map and literature support are not available.</p><div class="controls">${c ? '<button class="btn btn-primary" data-view="compare">Open the comparison</button>' : ''}</div></div></section>`;
   const groups = groupNames(d);
   const compRows = groups.length && d.samples.some(s => s.meta?.Group)
@@ -272,8 +280,8 @@ function viewOverview() {
   <div class="flow">${flow.map(x => `<span>${x}</span>`).join('<i>→</i>')}</div>
   <div class="grid kpis">${kpis}</div>
   <div class="grid two section">${mapCard}${compCard}</div>
-  <div class="section">${glossary(d)}</div>
-  ${d.metabolic ? `<div class="section">${pathwayTable(8)}</div>` : ''}`;
+  ${d.metabolic ? `<div class="section">${pathwayTable(8)}</div>` : ''}
+  <div class="section">${glossary(d)}</div>`;
 }
 function sampleLabel(id) {
   const s = state.data.samples.find(x => x.id === id);
@@ -304,7 +312,7 @@ function drawEmbedding(sel = '.embedding.main', { sampleOnly = null } = {}) {
   const gx = c => (expr ? c.ex : c.x), gy = c => (expr ? c.ey : c.y);
   const W = Number(svg.dataset.w || 640), H = Number(svg.dataset.h || 400), pad = 24;
   const base = d.cells.filter(c => Number.isFinite(gx(c)) && Number.isFinite(gy(c)));
-  const cells = sampleOnly ? base : base.filter(c => state.sample === 'all' || c.sample === state.sample);
+  const cells = sampleOnly ? base : base.filter(c => inMapGroup(d, c.sample) && (state.sample === 'all' || c.sample === state.sample));
   const xs = base.map(gx), ys = base.map(gy);
   const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
   const X = v => pad + (v - x0) / ((x1 - x0) || 1) * (W - 2 * pad), Y = v => H - pad - (v - y0) / ((y1 - y0) || 1) * (H - 2 * pad);
@@ -425,6 +433,18 @@ function pathwayHover(d, p, i) {
     `<br><br><b>${esc(t.label)}</b>: activity ${sig(v)} (relative units)<br>z-score across cell types: ${sig(p.z[i])} · rank ${rank} of ${order.length}` +
     `<br>Highest in: ${esc(typeLabel(p.top || '—'))} · mean over cell types ${sig(p.score)}<br><span style="color:#667085">Select to open this pathway</span>`;
 }
+/* Outlines on the heatmap: the selected pathway (row) and cell type (column) in dark, the hovered ones in gray. */
+function heatMarks(sel, hov) {
+  const rect = (o, color, width) => ({ type: 'rect', layer: 'above', fillcolor: 'rgba(0,0,0,0)', line: { color, width }, ...o });
+  const row = (i, color, width) => rect({ xref: 'paper', x0: 0, x1: 1, yref: 'y', y0: i - .5, y1: i + .5 }, color, width);
+  const col = (j, color, width) => rect({ xref: 'x', x0: j - .5, x1: j + .5, yref: 'paper', y0: 0, y1: 1 }, color, width);
+  const shapes = [];
+  if (hov && hov.row >= 0 && hov.row !== sel.row) shapes.push(row(hov.row, '#667085', 1.5));
+  if (hov && hov.col >= 0 && hov.col !== sel.col) shapes.push(col(hov.col, '#667085', 1.5));
+  if (sel.row >= 0) shapes.push(row(sel.row, '#0b1f33', 2));
+  if (sel.col >= 0) shapes.push(col(sel.col, '#0b1f33', 2));
+  return shapes;
+}
 async function drawPathwayHeatmap() {
   const holder = $('#pathway-heat'); if (!holder) return;
   const d = state.data, rows = heatRows(d), types = d.cellTypes;
@@ -441,14 +461,21 @@ async function drawPathwayHeatmap() {
     const strip = { type: 'heatmap', z: rows.map(p => [cats.indexOf(p.category) + .5]), x: ['Category'], y: rows.map(p => p.name), xaxis: 'x2', yaxis: 'y', zmin: 0, zmax: n,
       text: rows.map(p => [`<b>${esc(p.category)}</b><br>${esc(p.name)}`]), hoverinfo: 'text', colorscale: scale, showscale: false, xgap: 0, ygap: 1 };
     const height = Math.max(320, rows.length * 18 + 110);
+    const sel = { row: rows.findIndex(x => x.id === state.pathway), col: types.findIndex(t => t.name === state.heatType) };
+    const at = pt => ({ row: rows.findIndex(x => x.name === pt?.y), col: pt?.curveNumber === 1 ? types.findIndex(t => t.label === pt?.x) : -1 });
+    const bold = (label, on) => (on ? `<b>${label}</b>` : label);
     holder.style.height = `${height}px`; holder.innerHTML = '';
     await Plotly.newPlot(holder, [strip, main], {
       height, margin: { l: 250, r: 20, t: 10, b: 90 }, paper_bgcolor: '#fff', plot_bgcolor: '#fff',
       font: { family: 'Inter, -apple-system, Segoe UI, Helvetica, Arial, sans-serif', size: 11.5, color: '#1d2939' },
-      xaxis: { domain: [.05, 1], side: 'bottom', tickangle: -35, title: { text: 'Cell type', standoff: 8 } }, xaxis2: { domain: [0, .035], showticklabels: false, ticks: '' },
-      yaxis: { autorange: 'reversed', automargin: true, tickfont: { size: 11 }, anchor: 'x2' }, hoverlabel: { align: 'left', bgcolor: '#fff', bordercolor: '#d0d5dd', font: { size: 12 } },
+      xaxis: { domain: [.05, 1], side: 'bottom', tickangle: -35, title: { text: 'Cell type', standoff: 8 }, tickmode: 'array', tickvals: types.map(t => t.label), ticktext: types.map((t, j) => bold(t.label, j === sel.col)) }, xaxis2: { domain: [0, .035], showticklabels: false, ticks: '' },
+      yaxis: { autorange: 'reversed', automargin: true, tickfont: { size: 11 }, anchor: 'x2', tickmode: 'array', tickvals: rows.map(x => x.name), ticktext: rows.map((x, i) => bold(x.name, i === sel.row)) }, shapes: heatMarks(sel, null), hoverlabel: { align: 'left', bgcolor: '#fff', bordercolor: '#d0d5dd', font: { size: 12 } },
     }, { displaylogo: false, responsive: true, modeBarButtonsToRemove: ['lasso2d', 'select2d', 'autoScale2d'] });
-    holder.on('plotly_click', ev => { const name = ev?.points?.[0]?.y; const p = d.pathways.find(x => x.name === name); if (p) { state.pathway = p.id; rerender(); $('#pathway-detail')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); } });
+    let last = '';
+    const mark = hov => { const key = hov ? `${hov.row}:${hov.col}` : ''; if (key === last) return; last = key; Plotly.relayout(holder, { shapes: heatMarks(sel, hov) }); };
+    holder.on('plotly_hover', ev => mark(at(ev?.points?.[0])));
+    holder.on('plotly_unhover', () => mark(null));
+    holder.on('plotly_click', ev => { const k = at(ev?.points?.[0]), p = rows[k.row]; if (p) { state.pathway = p.id; if (k.col >= 0) state.heatType = types[k.col].name; rerender(); $('#pathway-detail')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); } });
   } catch (e) { if ($('#pathway-heat')) $('#pathway-heat').innerHTML = `<div class="empty">The heatmap could not be drawn (${esc(e.message)}).</div>`; }
 }
 function viewPathways() {
@@ -465,7 +492,7 @@ function viewPathways() {
     <select class="select" id="category-select" aria-label="Pathway category"><option value="all">All categories</option>${categories.map(c => `<option ${state.category === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></div>`;
   const nHeat = heatRows(d).length;
   return `${pageHead('Metabolic pathways', 'Metabolic pathway explorer', `Estimated activity of ${plural(d.pathways.length, 'KEGG metabolic pathway')} in each cell type, from the metabolic model applied to the estimated single-cell profiles (relative units; compare values within this analysis). Select a pathway in the heatmap or the table to see its details, map and literature support.`, `<div class="controls"><button class="btn btn-secondary" data-action="exportpathways">${icon('download')} CSV</button></div>`)}
-  <section class="card"><div class="card-head"><div><div class="card-title">Pathway activity heatmap</div><div class="card-sub">Rows: KEGG pathways, grouped by category (left strip); columns: cell types. Color: ${state.heatScale === 'z' ? 'z-score of the pathway\u2019s activity across cell types (red: above the pathway\u2019s average over cell types; blue: below)' : 'mean activity in relative units'}. Hover a cell for the pathway, its category, reactions, enzyme genes, value and rank; select it to open the pathway.</div></div></div>
+  <section class="card"><div class="card-head"><div><div class="card-title">Pathway activity heatmap</div><div class="card-sub">Rows: KEGG pathways, grouped by category (left strip); columns: cell types. Color: ${state.heatScale === 'z' ? 'z-score of the pathway\u2019s activity across cell types (red: above the pathway\u2019s average over cell types; blue: below)' : 'mean activity in relative units'}. Hover a cell to outline its pathway (row) and cell type (column) and to see the category, reactions, enzyme genes, value and rank. Select a cell to keep its pathway and cell type outlined and to open the pathway below.</div></div></div>
     <div class="card-body"><div class="controls" style="margin-bottom:10px">${controls}<div class="segmented" role="group" aria-label="Rows"><button class="${state.heatAll ? '' : 'active'}" data-heat-all="0">40 most variable</button><button class="${state.heatAll ? 'active' : ''}" data-heat-all="1">All</button></div>
     <div class="segmented" role="group" aria-label="Color scale"><button class="${state.heatScale === 'z' ? 'active' : ''}" data-heat-scale="z">z-score</button><button class="${state.heatScale === 'raw' ? 'active' : ''}" data-heat-scale="raw">Activity</button></div><span class="note" style="margin:0">${plural(nHeat, 'pathway')} shown</span></div>
     <div id="pathway-heat" class="heatmap-frame"><div class="empty">Loading the heatmap…</div></div>
@@ -828,6 +855,30 @@ function checkComparison(c) {
   if (c.de.volcano.points.length > 80000) throw new Error('The comparison is too large to display.');
   return c;
 }
+/* Per-sample bulk expression and mean normalized count of every tested gene (demo: loaded when the comparison opens). */
+function checkBulkAll(b) {
+  if (!b || !Array.isArray(b.genes) || !Array.isArray(b.samples) || !Array.isArray(b.values) || b.values.length !== b.genes.length || !Array.isArray(b.baseMean) || b.baseMean.length !== b.genes.length) throw new Error('Invalid expression table.');
+  if (b.genes.length > 80000) throw new Error('The expression table is too large to display.');
+  return { ...b, index: new Map(b.genes.map((g, i) => [g, i])) };
+}
+function bulkOfGene(d, gene) {
+  const bx = d.bulkExpression, all = d.bulkAll, i = all ? all.index.get(gene) : undefined;
+  if (bx?.values?.[gene]) return { samples: bx.samples, values: bx.values[gene], unit: bx.unit, unitShort: bx.unitShort, baseMean: i !== undefined ? all.baseMean[i] : null };
+  if (i !== undefined) return { samples: all.samples, values: all.values[i], unit: all.unit || bx?.unit, unitShort: all.unitShort || bx?.unitShort, baseMean: all.baseMean[i] };
+  return null;
+}
+async function loadBulkAll() {
+  const d = state.data;
+  if (d.bulkAll || !d.bulkAllUrl || d.lazy.bulkAll) return;
+  d.lazy.bulkAll = 'loading';
+  try {
+    const r = await fetch(d.bulkAllUrl); if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    d.bulkAll = checkBulkAll(await r.json()); d.lazy.bulkAll = 'done';
+  } catch (e) { d.lazy.bulkAll = `error: ${e.message}`; }
+  /* redraw only when the selected gene was waiting for these values */
+  const c = d.comparison, gene = c && (state.cmp.gene || deRows(c)[0]?.gene);
+  if (state.data === d && state.view === 'compare' && gene && !(d.bulkExpression?.values?.[gene] && c.de.table.some(x => x.gene === gene))) rerender();
+}
 /* Demo results load large blocks on first use. */
 async function ensureLazy(key, check) {
   const d = state.data, url = d[`${key}Url`];
@@ -891,14 +942,15 @@ function viewSignaling() {
   const heatCell = (s, v, i) => `<td class="num"><span class="heat" style="${diverge(v, m)}" title="${esc(s.label)} · ${esc(typeLabel(types[i]))}: ${sig(v)}${s.topGenes?.[i]?.length ? ` · top genes: ${esc(s.topGenes[i].join(', '))}` : ''}">${sig(v)}</span></td>`;
   const table = `<table class="table gs-table"><thead><tr>${th('label', 'Gene set')}${th('db', 'Database')}${types.map((t, i) => th(`t${i}`, `<span class="swatch" style="background:${typeColor(t, i)};margin-right:4px"></span>${esc(typeLabel(t).replace(' (gamma)', ''))}`, { num: true, title: `Mean activity in ${typeNoun(t)} cells` })).join('')}${th('range', 'Range', { num: true, title: 'Highest minus lowest cell type' })}${th('top', 'Top genes (highest cell type)')}${th('cons', 'Consistency', { title: 'Agreement of related gene sets across databases' })}${th('genes', 'Genes used', { num: true, title: 'Member genes among the scoring genes' })}</tr></thead>
     <tbody>${shown.map(s => `<tr class="clickable${s.id === sel?.id ? ' selected' : ''}" data-gs="${esc(s.id)}" tabindex="0"><td><button type="button" class="name-link" data-gs="${esc(s.id)}">${esc(s.label)}</button><small>${esc(s.id)}${s.collection === 'GOBP' && s.theme ? ` · theme: ${esc(s.theme)}` : ''}</small></td><td><span class="badge db-${s.collection.toLowerCase()}">${esc(GS_LABEL[s.collection])}</span></td>${s.activity.map((v, i) => heatCell(s, v, i)).join('')}<td class="num">${sig(s.range)}</td><td>${topCell(s)}</td><td>${consensusBadge(s.consensus)}</td><td class="num">${num(s.genesUsed)} / ${num(s.libraryGenes)}</td></tr>`).join('') || `<tr><td colspan="${6 + types.length}" class="empty">No gene sets match the filter.</td></tr>`}</tbody></table>`;
-  return `${head}${oodBanner(d)}${sourceMethodCard(g)}
+  return `${head}${oodBanner(d)}
   <div class="split wide-left section"><section class="card"><div class="card-body" style="padding-bottom:6px"><div class="controls">
     <div class="toggle-chips" role="group" aria-label="Gene-set databases">${toggles}</div>
     <label class="search">${icon('search')}<input class="input" id="gs-search" type="search" placeholder="Search gene sets, themes or genes" value="${esc(state.gs.search)}" aria-label="Search gene sets"></label></div>
     <p class="note" style="margin:8px 0 0">${num(all.length)} gene sets · mean activity per cell type (relative units)${on.includes('GOBP') ? ' · GO Biological Process: one representative term per theme of overlapping terms' : ''}. Hover a value for the top genes in that cell type.</p></div>
     <div class="card-body table-wrap tall" style="padding-top:0" data-scroll-id="gs-table">${table}</div>
     <div class="card-foot">${scaleLegend(m, 'Activity score (relative units)')}${rows.length > shown.length ? `<button class="link-btn" data-action="gsmore">Show ${num(Math.min(60, rows.length - shown.length))} more of ${num(rows.length - shown.length)}</button>` : '<span></span>'}</div></section>
-  <aside class="detail">${sel ? genesetDetail(g, sel, m) : ''}</aside></div>`;
+  <aside class="detail">${sel ? genesetDetail(g, sel, m) : ''}</aside></div>
+  <div class="section">${sourceMethodCard(g)}</div>`;
 }
 function genesetDetail(g, s, m) {
   const types = g.cellTypes, vals = s.activity.map((v, i) => ({ v, i })).filter(x => Number.isFinite(x.v));
@@ -1013,7 +1065,9 @@ function deGeneDetail(d, c) {
   const vp = r ? null : c.de.volcano.points.find(p => p[0] === gene);
   if (!r && !vp) return '<section class="card"><div class="card-body"><div class="empty">Select a gene in the table or the volcano plot.</div></div></section>';
   const fc = r ? r.log2FCShrunk : vp[1], padj = r ? r.padj : 10 ** -vp[2], dir = r ? r.direction : vp[3];
-  const bx = d.bulkExpression, bulk = bx?.values?.[gene] ? Object.fromEntries(bx.samples.map((sm, i) => [sm, bx.values[gene][i]])) : null;
+  const bx = d.bulkExpression, bg = bulkOfGene(d, gene), bulk = bg ? Object.fromEntries(bg.samples.map((sm, i) => [sm, bg.values[i]])) : null;
+  const pending = d.bulkAllUrl && !d.bulkAll && !String(d.lazy.bulkAll || '').startsWith('error');
+  const baseMean = r ? r.baseMean : bg && Number.isFinite(bg.baseMean) ? bg.baseMean : null;
   const tv = typeValues(d, gene), types = d.cellTypes;
   let where = '';
   if (tv) {
@@ -1023,8 +1077,8 @@ function deGeneDetail(d, c) {
     where = `<div class="note" style="margin:16px 0 6px">Where it is expressed: estimated expression by cell type, log(1 + counts per 10,000)</div>${vals.map(x => `<div class="hbar"><span>${esc(x.t.label)}</span><span class="track"><i style="width:${(Math.max(0, x.v) / vmax * 100).toFixed(1)}%;background:${x.t.color}"></i></span><b>${sig(x.v)}</b></div>`).join('')}${shift ? `<p class="note">${shift}</p>` : ''}`;
   }
   return `<section class="card"><div class="card-head"><div><div class="card-title"><i>${esc(gene)}</i></div><div class="card-sub">${dir === 'up' ? `Higher in ${esc(c.test)}` : dir === 'down' ? `Lower in ${esc(c.test)}` : 'Not significant'}</div></div><a class="badge" href="https://www.ncbi.nlm.nih.gov/gene/?term=${encodeURIComponent(gene)}%5Bsym%5D+AND+human%5Borgn%5D" target="_blank" rel="noopener">NCBI Gene</a></div>
-    <div class="card-body"><div class="metrics small"><div class="metric"><small>Shrunken log2 fold change</small><b>${sig(fc)}</b></div><div class="metric"><small>Adjusted p</small><b>${fmtP(padj)}</b></div><div class="metric"><small>Mean normalized count</small><b>${r ? num(r.baseMean, 0) : '—'}</b></div></div>
-      ${bulk ? `<div class="note" style="margin:16px 0 4px">Bulk expression in each sample, ${esc(bx.unit || 'log2(normalized count + 1)')}</div>${groupStrip(bulk, bx.unitShort || 'log2 normalized count', { width: 330, height: 190 })}` : '<p class="note">Per-sample values of this gene are in the results download.</p>'}
+    <div class="card-body"><div class="metrics small"><div class="metric"><small>Shrunken log2 fold change</small><b>${sig(fc)}</b></div><div class="metric"><small>Adjusted p</small><b>${fmtP(padj)}</b></div><div class="metric"><small>Mean normalized count</small><b id="cmp-basemean">${baseMean !== null ? num(baseMean, 0) : pending ? '…' : '—'}</b></div></div>
+      ${bulk ? `<div class="note" style="margin:16px 0 4px">Bulk expression in each sample, ${esc(bg.unit || 'log2(normalized count + 1)')}</div>${groupStrip(bulk, bg.unitShort || 'log2 normalized count', { width: 330, height: 190 })}` : pending ? '<p class="note" id="cmp-bulk-pending">Loading the per-sample values of this gene…</p>' : d.bulkAllUrl ? '<p class="note">The per-sample values of this gene could not be loaded.</p>' : '<p class="note">Per-sample values of this gene are in the results download.</p>'}
       ${where}</div></section>`;
 }
 async function drawVolcano() {
@@ -1162,7 +1216,7 @@ function mapComparisonCard(mc, isOwn) {
       <div style="margin-top:14px"><div class="prose two-col"><p><b>No: the two maps are related but organized differently.</b> On average ${p(mc.overlap)} of each profile's ${num(mc.k)} nearest neighbors are the same in both maps. Gene expression keeps every cell type apart, which makes the expression map the place to check cell-type assignments. The metabolic map groups cell types that share metabolic programs: the table shows which other types each cell type mixes with.</p>
         <p><b>Why the metabolic map is useful.</b> For most pathways, most of the variation between profiles lies within cell types (median ${p(mc.withinShareMedian)}). The metabolic map arranges this variation into gradients: neighbors in the metabolic map have more similar pathway activity than neighbors in the expression map (median correlation ${sig(mc.autocorrMetabolicMedian)} vs ${sig(mc.autocorrExpressionMedian)}). Profiles of one cell type that sit apart in the metabolic map differ in estimated metabolism.</p>
         <ul class="plain"><li><b>Check cell types</b> in the expression map (Overview, Expression).</li><li><b>Find shared metabolic programs</b>: cell types that overlap in the metabolic map.</li><li><b>Find metabolic heterogeneity</b>: color the metabolic map by metabolic activity, or select a pathway in <a href="#pathways" data-view="pathways">Metabolic pathways</a>.</li></ul>
-        <p class="note">Neighborhoods are computed in the full spaces (expression: ${esc(mc.expressionSpace || '')}; metabolic: ${esc(mc.metabolicSpace || '')}), not on the 2-D maps. The metabolic map comes from the same model as the activity values, so their agreement is partly expected by construction.</p></div>
+        <p class="note">Neighborhoods are computed in the full spaces (expression: ${esc(mc.expressionSpace || '')}; metabolic: ${esc(mc.metabolicSpace || '')}), not on the 2-D maps.${mc.layoutNote ? ` ${esc(mc.layoutNote)}` : ''} The metabolic map comes from the same model as the activity values, so their agreement is partly expected by construction.</p></div>
       <div class="table-wrap" style="margin-top:12px"><table class="table compact"><thead><tr><th>Cell type</th><th class="num">Profiles</th><th class="num" title="Share of the 15 nearest neighbors of the same cell type">Same type, expression</th><th class="num">Same type, metabolic</th><th class="num" title="Share of nearest neighbors shared between the two maps">Shared neighbors</th><th>Mixes with, in the metabolic map (≥ 5% of neighbors)</th></tr></thead><tbody>${rows}</tbody></table></div></div></div></section>`;
 }
 function viewFigures() {
@@ -1201,7 +1255,7 @@ function viewAbout() {
   <section class="card section"><div class="card-head"><div><div class="card-title">Methods</div><div class="card-sub">How each result is computed</div></div></div>
     <div class="card-body"><div class="grid halves methods">
       <div><h4>Composition and estimated profiles</h4><p>Each bulk sample is described as a mixture of the nine cell types of the built-in healthy human pancreas reference (Baron et al., Cell Systems 2016). Single-cell profiles are then estimated from each sample in proportion to its composition (300 per sample in the demo). A sample is flagged as outside the reference when the best mixture fits its expression poorly.</p>
-        <h4>Maps</h4><p>Expression map: UMAP of the first 30 principal components of the 2,000 most variable genes, log(1 + counts per 10,000). Metabolic map: UMAP of the metabolic model's latent space. Both show the same profiles.</p>
+        <h4>Maps</h4><p>${esc(d.origin === 'demo' && DEMO().mapMethod ? DEMO().mapMethod : 'Expression map: UMAP of the first 30 principal components of the 2,000 most variable genes, log(1 + counts per 10,000). Metabolic map: UMAP of the metabolic model\u2019s latent space. Both show the same profiles.')}</p>
         <h4>Metabolic pathways</h4><p>A graph-based model of the KEGG reaction network estimates the activity of ${num(d.counts.reactions || 1225)} metabolic reactions in every profile. A pathway's activity is the mean activity of its reactions, in relative units, averaged per cell type. Pathway maps are drawn from the KEGG reference pathways; each line is a reaction step of the model.</p></div>
       <div><h4>Signaling and functional pathways</h4><p>Gene sets from MSigDB v2026.2.Hs (Hallmark; Reactome release 97; WikiPathways 2026-10-10; GO Biological Process, GO release 2026-07-26) and PROGENy (14 pathways, 500 footprint genes each) are scored in every estimated profile with a univariate linear model (t-value; decoupler method) on log(1 + counts per 10,000), then averaged per sample and cell type. Top genes are the member genes that contribute most to the score in each cell type.</p>
         <h4>Group comparison</h4><p>Bulk counts: DESeq2 (PyDESeq2 0.5.4) with the patient as covariate, shrunken fold changes, Benjamini–Hochberg adjustment; fgsea multilevel enrichment of the Wald statistics (15–500 genes per set); PROGENy activity by a decoupler 2.2.0 multivariate linear model; estimated composition by a two-sided rank-sum test per cell type.</p>
@@ -1405,7 +1459,7 @@ function stageName(j) {
   return { queued: 'Queued', starting: 'Starting', validating: 'Checking input', reconstruction: 'Estimating composition and profiles', pathway_activity: 'Scoring signaling and functional pathways', comparison: 'Comparing the groups', metabolic_model: 'Modeling metabolism', packaging: 'Packaging results', completed: 'Complete', failed: 'Failed' }[s] || s;
 }
 function resetViewState() {
-  state.hidden.clear(); state.sample = 'all'; state.gene = null; state.selSample = null; state.sort = {}; state.search = ''; state.category = 'all';
+  state.hidden.clear(); state.sample = 'all'; state.group = 'all'; state.gene = null; state.selSample = null; state.sort = {}; state.search = ''; state.category = 'all';
   state.gs.set = null; state.gs.limit = 60; state.gs.search = '';
   Object.assign(state.cmp, { setSearch: '', geneSearch: '', geneLimit: 60, setLimit: 40, gene: null, set: null });
   state.lit.conn = null; state.lit.filter = 'genes'; state.litCache = {}; state.mapFig = null;
@@ -1530,7 +1584,7 @@ const ROW_KEYS = ['pathway', 'gs', 'litrow', 'samplePick', 'gene', 'cmpgene', 'c
 document.addEventListener('click', e => {
   const link = e.target.closest('a[href]');
   if (link && !link.dataset.view) return;   /* ordinary links (PubMed, KEGG, downloads) open without selecting the row */
-  const el = e.target.closest('[data-view],[data-action],[data-pathway],[data-type],[data-color],[data-gene],[data-figure],[data-src],[data-gscol],[data-gs],[data-cmpcol],[data-cmpgene],[data-cmpset],[data-sort-table],[data-sample-pick],[data-space],[data-heat-all],[data-heat-scale],[data-litfilter],[data-litrow],.modal-close,.menu-btn,.overlay');
+  const el = e.target.closest('[data-view],[data-action],[data-pathway],[data-type],[data-color],[data-gene],[data-figure],[data-src],[data-gscol],[data-gs],[data-cmpcol],[data-cmpgene],[data-cmpset],[data-sort-table],[data-sample-pick],[data-space],[data-mapgroup],[data-heat-all],[data-heat-scale],[data-litfilter],[data-litrow],.modal-close,.menu-btn,.overlay');
   if (!el) return;
   if (el.classList.contains('overlay')) { if (e.target === el) closeModal(); return; }
   if (el.classList.contains('modal-close')) { closeModal(); return; }
@@ -1541,6 +1595,7 @@ document.addEventListener('click', e => {
   if (ds.pathway) { state.pathway = ds.pathway; state.lit.conn = null; if (state.view === 'pathways') rerender(); else setView('pathways'); return; }
   if (ds.samplePick) { state.selSample = ds.samplePick; rerender(); return; }
   if (ds.space) { state.mapSpace = ds.space; rerender(); return; }
+  if (ds.mapgroup) { state.group = ds.mapgroup; state.sample = 'all'; rerender(); return; }
   if (ds.heatAll !== undefined) { state.heatAll = ds.heatAll === '1'; rerender(); return; }
   if (ds.heatScale) { state.heatScale = ds.heatScale; rerender(); return; }
   if (ds.litfilter) { state.lit.filter = ds.litfilter; rerenderLiterature(); return; }
