@@ -25,6 +25,12 @@ Analyses of your own data run in a Cellaris workspace; contact Cellaris for a wo
 - Literature support for every reaction step on a pathway map: human pancreatic cancer papers on its
   enzymes, papers in the most specific cell type, curated enzyme evidence, recent paper titles and
   candidate hypotheses (predicted, not yet reported)
+- Literature support for genes, gene sets and cell types, with the same definitions as for the reaction
+  steps: for the selected gene (Gene expression and Compare groups), the number of human pancreatic
+  cancer papers, the papers that also concern each cell type against the number expected, and recent
+  paper titles; for the selected gene set (Signaling pathways), the same counts on all member genes
+  together and on the genes that drive the score in the chosen cell type; for each cell type (Gene
+  expression), the genes discussed with it more often than expected
 - Signaling and functional pathways: activity of MSigDB Hallmark, PROGENy, Reactome, WikiPathways and
   GO Biological Process gene sets in each cell type and sample, with the database and version of every
   set, the scoring method, the top genes in each cell type and an indicator of agreement across databases.

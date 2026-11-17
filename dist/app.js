@@ -60,6 +60,7 @@ const state = {
   data: null, view: 'overview', colorBy: 'type', mapSpace: 'expression', sample: 'all', group: 'all', hidden: new Set(), pathway: null, heatType: null,
   search: '', category: 'all', gene: null, selSample: null, heatAll: false, heatScale: 'z',
   gs: { on: new Set(['H', 'PROGENY']), search: '', set: null, limit: 60, type: null },
+  lit: { type: null },
   cmp: { collection: 'H', setSearch: '', setLimit: 40, geneSearch: '', geneLimit: 60, gene: null, set: null, comp: null },
   lit: { conn: null, filter: 'genes' },
   sort: {}, groups: {}, demoRaw: null,
@@ -157,6 +158,7 @@ function prepare(raw, origin) {
     pathwayInfo: raw.pathwayInfo || {}, mapComparison: raw.mapComparison || null, glossary: raw.glossary || null,
     bulkExpression: raw.bulkExpression || result.bulkExpression || null, typeExpression: raw.typeExpression || result.typeExpression || null,
     bulkAllUrl: raw.bulkAllUrl || null, bulkAll: null, genesetGenesUrl: raw.genesetGenesUrl || null, genesetGenes: null,
+    geneLitUrl: raw.geneLitUrl || null, geneLit: null, genesetLitUrl: raw.genesetLitUrl || null, genesetLit: null, celltypeLitUrl: raw.celltypeLitUrl || null, celltypeLit: null,
     download: raw.download || null, lazy: {},
   };
 }
@@ -722,6 +724,79 @@ async function exportLiterature() {
 /* ---------- Gene expression ---------- */
 const argmax = v => v.reduce((b, x, i) => (Number.isFinite(x) && (b < 0 || x > v[b]) ? i : b), -1);
 const patientOf = s => s?.meta?.Patient || s?.meta?.patient || s?.meta?.Case || null;
+/* ---------- Literature support for genes, gene sets and cell types ---------- */
+function checkGeneLit(b) { if (!b || typeof b.genes !== 'object' || !Array.isArray(b.cellTypes) || typeof b.expectedByScopePapers !== 'object') throw new Error('Invalid literature table.'); return b; }
+function checkSetLit(b) { if (!b || typeof b.sets !== 'object' || !Array.isArray(b.cellTypes)) throw new Error('Invalid literature table.'); return b; }
+function checkTypeLit(b) { if (!b || typeof b.cellTypes !== 'object') throw new Error('Invalid literature table.'); return b; }
+/* null when the block is loaded; otherwise the text to show while it loads or when it failed */
+function lazyState(key, check) {
+  const d = state.data, st = d.lazy[key];
+  if (d[key]) return null;
+  if (d[`${key}Url`] && !String(st || '').startsWith('error')) { ensureLazy(key, check); return '<p class="note">Loading literature support…</p>'; }
+  return `<p class="note">${st ? `Literature support could not be loaded (${esc(String(st).replace(/^error: /, ''))}).` : 'Literature support is not available for this result.'}</p>`;
+}
+function geneLitRecord(L, gene) {
+  const sym = L.genes[gene] ? gene : L.aliases?.[gene], r = sym && L.genes[sym];
+  if (!r) return null;
+  return { sym, scope: r[0], pancreas: r[1], obs: r[2], enr: r[3], top: r[4], exp: L.expectedByScopePapers[String(r[0])] || [], links: L.links?.[sym] || null };
+}
+const ratioCell = v => (Number.isFinite(v) && v > 0 ? `<span class="heat" style="${diverge(Math.log2(v), 3)}">${sig(v)}</span>` : '—');
+function litTypeTable(types, obs, exp, enr, top) {
+  return `<table class="table compact lit-types"><thead><tr><th>Cell type</th><th class="num" title="Pancreatic cancer papers that also concern the cell type">Papers</th><th class="num" title="Papers × the share of pancreatic cancer papers that concern the cell type">Expected</th><th class="num" title="(papers + 0.5) ÷ (expected + 0.5)">Observed ÷ expected</th></tr></thead><tbody>${types.map((t, i) => `<tr class="${t === top ? 'selected' : ''}"><td><span class="swatch" style="background:${typeColor(t, i)};margin-right:6px"></span>${esc(typeLabel(t))}</td><td class="num">${num(obs[i])}</td><td class="num">${sig(exp[i])}</td><td class="num">${ratioCell(enr[i])}</td></tr>`).join('')}</tbody></table>`;
+}
+function litCaution(gene) { const c = DEMO().litCautions?.[gene]; return c ? `<p class="note" data-lit-caution><b>Check this gene name.</b> ${esc(c)}</p>` : ''; }
+const LIT_READING = 'Papers are human pancreatic cancer papers in PubMed in which the gene is recognized automatically (PubTator3). Expected = the papers on the gene × the share of pancreatic cancer papers that concern the cell type; observed ÷ expected = (papers + 0.5) ÷ (expected + 0.5). The highlighted cell type has the highest ratio among cell types with at least 3 papers. Counts show how much a gene has been studied in a context, not that it is expressed or active there, and automatic gene recognition makes mistakes.';
+function geneLiterature(d, gene, { compact = false, id = 'gene-lit' } = {}) {
+  if (!d.geneLitUrl && !d.geneLit) return '';
+  const head = `<div class="note" style="margin:18px 0 6px"><b style="color:var(--ink-2)">Literature support</b> · human pancreatic cancer papers on this gene</div>`;
+  const wait = lazyState('geneLit', checkGeneLit);
+  if (wait !== null) return `<div id="${id}" class="detail-sub">${head}${wait}</div>`;
+  const L = d.geneLit, r = geneLitRecord(L, gene);
+  if (!r) return `<div id="${id}" class="detail-sub">${head}<p class="note">No human pancreatic cancer paper is annotated with this gene.</p></div>`;
+  const ti = r.top ? L.cellTypes.indexOf(r.top) : -1;
+  const metrics = `<div class="metrics small"><div class="metric"><small>Pancreatic cancer papers</small><b>${num(r.scope)}</b></div><div class="metric"><small>All human pancreas papers</small><b>${num(r.pancreas)}</b></div><div class="metric"><small>Most associated cell type</small><b>${r.top ? `${esc(typeLabel(r.top))} <span class="of">× ${sig(r.enr[ti])}</span>` : '—'}</b></div></div>`;
+  const recent = r.links?.[0]?.length ? `<div class="note" style="margin:12px 0 4px">Most recent pancreatic cancer papers</div>${paperList(r.links[0], L.titles, compact ? 3 : 5)}` : '';
+  const inType = !compact && r.top && r.links?.[1]?.length ? `<div class="note" style="margin:12px 0 4px">Most recent papers that also concern ${esc(typeNoun(r.top))} cells</div>${paperList(r.links[1], L.titles, 5)}` : '';
+  return `<div id="${id}" class="detail-sub">${head}${metrics}${litCaution(r.sym)}${compact ? '' : litTypeTable(L.cellTypes, r.obs, r.exp, r.enr, r.top)}${recent}${inType}<p class="note">${compact ? 'Counts show how much a gene has been studied, not that it is expressed or active. The Gene expression tab shows the breakdown by cell type for marker genes.' : esc(LIT_READING)}${r.sym !== gene ? ` Counted under the current symbol ${esc(r.sym)}.` : ''}</p></div>`;
+}
+/* Genes studied most in connection with each cell type (Gene expression tab). */
+function celltypeLiteratureCard(d) {
+  if (!d.celltypeLitUrl && !d.celltypeLit) return '';
+  const wait = lazyState('celltypeLit', checkTypeLit);
+  const shell = body => `<section class="card section" id="lit-celltypes"><div class="card-head"><div><div class="card-title">Literature support by cell type</div><div class="card-sub">Genes discussed in connection with a cell type more often than expected, among human pancreatic cancer papers</div></div><span class="badge accent">Pancreatic cancer</span></div><div class="card-body">${body}</div></section>`;
+  if (wait !== null) return shell(wait);
+  const C = d.celltypeLit, types = d.cellTypes.map(t => t.name).filter(t => C.cellTypes[t]);
+  const t = types.includes(state.lit.type) ? state.lit.type : types.find(x => (C.cellTypes[x].topGenes || []).length >= 20) || types[0], k = C.cellTypes[t];
+  const picker = `<div class="toggle-chips" role="group" aria-label="Cell type for the literature table" id="lit-type">${types.map((x, i) => `<button class="${x === t ? 'active' : ''}" data-littype="${esc(x)}" aria-pressed="${x === t}"><span class="swatch" style="background:${typeColor(x, i)}"></span>${esc(typeLabel(x).replace(' (gamma)', ''))}<small>${num(C.cellTypes[x].scopePapers)}</small></button>`).join('')}</div>`;
+  const rows = (k.topGenes || []).map(([g, obs, exp, enr, all, pm]) => { const tt = pm?.length ? C.titles?.[String(pm[0])] : null; return `<tr><td><i>${esc(g)}</i>${DEMO().litCautions?.[g] ? ` <span class="badge warn" title="${esc(DEMO().litCautions[g])}">check name</span>` : ''}</td><td class="num">${num(obs)}</td><td class="num">${sig(exp)}</td><td class="num">${ratioCell(enr)}</td><td class="num">${num(all)}</td><td>${tt ? `<a href="https://pubmed.ncbi.nlm.nih.gov/${encodeURIComponent(pm[0])}/" target="_blank" rel="noopener">${esc(shorten(tt.t, 90))}</a><small>${esc([tt.j, tt.y].filter(Boolean).join(', '))}</small>` : '<span class="note">—</span>'}</td></tr>`; }).join('');
+  return shell(`${picker}<p class="note" style="margin:10px 0">${num(k.scopePapers)} pancreatic cancer papers concern ${esc(typeNoun(t))} cells. ${plural(k.topGenes.length, 'gene')} with at least 5 such papers, highest observed ÷ expected first${k.topGenes.length < 50 ? ' (few genes reach 5 papers for this cell type)' : ''}.</p>
+    <div class="table-wrap" style="max-height:420px" data-scroll-id="lit-celltypes"><table class="table"><thead><tr><th>Gene</th><th class="num">Papers in ${esc(typeNoun(t))} cells</th><th class="num">Expected</th><th class="num">Observed ÷ expected</th><th class="num">All pancreatic cancer papers</th><th>Most recent paper</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty">No gene has 5 papers for this cell type.</td></tr>'}</tbody></table></div>
+    <p class="note">${esc(LIT_READING)} In pancreatic cancer papers, “ductal” mostly refers to ductal adenocarcinoma: about a third of all papers match it, which limits the ratio for ductal cells to about 3.</p>`);
+}
+/* Literature on the member genes of a gene set (Signaling pathways tab). */
+function genesetLiteratureCard(d, g, s) {
+  if (!s || (!d.genesetLitUrl && !d.genesetLit)) return '';
+  const shell = body => `<section class="card section" id="gs-lit"><div class="card-head"><div><div class="card-title">Literature support: ${esc(s.label)}</div><div class="card-sub">Human pancreatic cancer papers on the member genes of this gene set, overall and by cell type</div></div><span class="badge accent">Pancreatic cancer</span></div><div class="card-body">${body}</div></section>`;
+  const wait = lazyState('genesetLit', checkSetLit);
+  if (wait !== null) return shell(wait);
+  const L = d.genesetLit, r = L.sets[s.id];
+  if (!r) return shell('<p class="note">No literature record for this gene set.</p>');
+  const [nLib, nWith, papers, obs, exp, enr, top] = r, types = g.cellTypes;
+  let ti = types.indexOf(state.gs.type); if (ti < 0 || !Number.isFinite(s.activity[ti])) ti = Number.isInteger(s.best) && s.best >= 0 ? s.best : 0;
+  const t = types[ti], gl = d.geneLit, gg = d.genesetGenes;
+  const metrics = `<div class="metrics small"><div class="metric"><small>Member genes with papers</small><b>${num(nWith)} <span class="of">of ${num(nLib)}</span></b></div><div class="metric"><small>Pancreatic cancer papers on member genes</small><b>${num(papers)}</b></div><div class="metric"><small>Most associated cell type</small><b>${top ? `${esc(typeLabel(top))} <span class="of">× ${sig(enr[L.cellTypes.indexOf(top)])}</span>` : '—'}</b></div></div>`;
+  let genes = '';
+  if (gg) {
+    const waitG = lazyState('geneLit', checkGeneLit);
+    if (waitG !== null) genes = waitG;
+    else {
+      const li = gl.cellTypes.indexOf(t), items = setGenesInType(gg, s, t);
+      const rows = items.map(x => { const q = geneLitRecord(gl, x.name), tt = q?.links?.[0]?.length ? gl.titles?.[String(q.links[0][0])] : null; return `<tr><td><i>${esc(x.name)}</i></td><td class="num">${q ? num(q.scope) : '0'}</td><td class="num">${q ? num(q.obs[li]) : '0'}</td><td class="num">${q ? sig(q.exp[li]) : '—'}</td><td class="num">${q ? ratioCell(q.enr[li]) : '—'}</td><td>${tt ? `<a href="https://pubmed.ncbi.nlm.nih.gov/${encodeURIComponent(q.links[0][0])}/" target="_blank" rel="noopener">${esc(shorten(tt.t, 80))}</a><small>${esc([tt.j, tt.y].filter(Boolean).join(', '))}</small>` : '<span class="note">—</span>'}</td></tr>`; }).join('');
+      genes = `<div class="note" style="margin:0 0 6px">Genes of this set that contribute most to its score in ${esc(typeNoun(t))} cells (the genes of the plot above; choose the cell type there)</div><div class="table-wrap" style="max-height:360px" data-scroll-id="gs-lit-genes"><table class="table compact" id="gs-lit-genes"><thead><tr><th>Gene</th><th class="num">Pancreatic cancer papers</th><th class="num">Papers in ${esc(typeNoun(t))} cells</th><th class="num">Expected</th><th class="num">Observed ÷ expected</th><th>Most recent paper</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty">No gene to list for this cell type.</td></tr>'}</tbody></table></div>`;
+    }
+  }
+  return shell(`${metrics}<div class="grid halves" style="margin-top:14px"><div><div class="note" style="margin:0 0 6px">All member genes together, each paper counted once</div>${litTypeTable(L.cellTypes, obs, exp, enr, top)}</div><div>${genes}</div></div><p class="note">${esc(LIT_READING)} A gene set is counted on the papers of all its member genes; large sets collect many papers, so compare the ratios, not the counts.</p>`);
+}
 function geneRows(d) {
   const types = d.cellTypes, info = d.markerInfo || {}, de = new Map((d.comparison?.de?.table || []).map(r => [r.gene, r]));
   return Object.keys(d.geneExpression).map(g => {
@@ -763,6 +838,7 @@ function viewGenes() {
   const table = `<section class="card"><div class="card-head"><div><div class="card-title">Marker genes</div><div class="card-sub">${plural(rowsAll.length, 'gene')} · estimated expression in log(1 + counts per 10,000)${hasDE ? `; bulk fold change ${esc(d.comparison.test)} vs ${esc(d.comparison.reference)} from the group comparison` : ''}</div></div></div>
     <div class="card-body table-wrap tall" data-scroll-id="genes-table"><table class="table"><thead><tr>${th('gene', 'Gene')}${th('known', 'Known marker of')}${th('top', 'Highest estimated in')}${th('max', 'Highest value', { num: true, title: 'Mean estimated expression in that cell type' })}${th('lead', 'Lead over other types', { num: true, title: 'Highest value minus the mean of the other cell types' })}${hasDE ? `${th('fc', 'Bulk log2 fold change', { num: true, title: `Shrunken log2 fold change, ${d.comparison.test} vs ${d.comparison.reference}` })}${th('padj', 'Adjusted p', { num: true })}` : ''}</tr></thead><tbody>${body}</tbody></table></div></section>`;
   return `${head}<div class="split">${table}<aside class="detail">${geneDetail(d, sel)}</aside></div>
+    ${celltypeLiteratureCard(d)}
     <p class="note">Estimated profiles are assigned to the nine cell types of the healthy pancreas reference. Malignant epithelial cells and cancer-associated fibroblasts have no reference type of their own; their expression is attributed mostly to the ductal and stellate types. Marker roles follow the reference annotation and the PDAC literature.</p>`;
 }
 function geneDetail(d, r) {
@@ -773,7 +849,8 @@ function geneDetail(d, r) {
       <div class="note" style="margin:0 0 6px">Estimated expression by cell type, log(1 + counts per 10,000)</div>${vals.map(x => `<div class="hbar"><span>${esc(x.t.label)}</span><span class="track"><i style="width:${(Math.max(0, x.v) / vmax * 100).toFixed(1)}%;background:${x.t.color}"></i></span><b>${sig(x.v)}</b></div>`).join('')}
       ${bulk ? `<div class="note" style="margin:18px 0 4px">Measured bulk expression in each sample, ${esc(bx.unit || 'log2(normalized count + 1)')}</div>${groupStrip(bulk, bx.unitShort || 'log2 normalized count', { width: 330, height: 190 })}` : ''}
       ${de ? `<div class="metrics small" style="margin-top:14px"><div class="metric"><small>Bulk log2 fold change</small><b>${sig(de.log2FCShrunk)}</b></div><div class="metric"><small>Adjusted p</small><b>${fmtP(de.padj)}</b></div><div class="metric"><small>Direction</small><b>${de.direction === 'up' ? `Higher in ${esc(d.comparison.test)}` : de.direction === 'down' ? `Lower in ${esc(d.comparison.test)}` : 'Not significant'}</b></div></div>` : ''}
-      <p class="note">Bulk differences between the groups combine changes in cell-type composition and changes within cells; the estimated cell-type values above are not compared between the groups.</p></div></section>`;
+      <p class="note">Bulk differences between the groups combine changes in cell-type composition and changes within cells; the estimated cell-type values above are not compared between the groups.</p>
+      ${geneLiterature(d, r.gene)}</div></section>`;
 }
 function exportGenes() {
   const d = state.data, types = d.cellTypes.map(t => t.name), rows = [['gene', 'known_marker_of', 'highest_estimated_in', ...types.map(t => `expression_${t}`), 'log2_fold_change_shrunk', 'padj']];
@@ -952,6 +1029,7 @@ function viewSignaling() {
     <div class="card-body table-wrap tall" style="padding-top:0" data-scroll-id="gs-table">${table}</div>
     <div class="card-foot">${scaleLegend(m, 'Activity score (relative units)')}${rows.length > shown.length ? `<button class="link-btn" data-action="gsmore">Show ${num(Math.min(60, rows.length - shown.length))} more of ${num(rows.length - shown.length)}</button>` : '<span></span>'}</div></section>
   <aside class="detail">${sel ? genesetDetail(g, sel, m) : ''}</aside></div>
+  ${genesetLiteratureCard(d, g, sel)}
   <div class="section">${sourceMethodCard(g)}</div>`;
 }
 function genesetDetail(g, s, m) {
@@ -1118,7 +1196,7 @@ function deGeneDetail(d, c) {
   return `<section class="card"><div class="card-head"><div><div class="card-title"><i>${esc(gene)}</i></div><div class="card-sub">${dir === 'up' ? `Higher in ${esc(c.test)}` : dir === 'down' ? `Lower in ${esc(c.test)}` : 'Not significant'}</div></div><a class="badge" href="https://www.ncbi.nlm.nih.gov/gene/?term=${encodeURIComponent(gene)}%5Bsym%5D+AND+human%5Borgn%5D" target="_blank" rel="noopener">NCBI Gene</a></div>
     <div class="card-body"><div class="metrics small"><div class="metric"><small>Shrunken log2 fold change</small><b>${sig(fc)}</b></div><div class="metric"><small>Adjusted p</small><b>${fmtP(padj)}</b></div><div class="metric"><small>Mean normalized count</small><b id="cmp-basemean">${baseMean !== null ? num(baseMean, 0) : pending ? '…' : '—'}</b></div></div>
       ${bulk ? `<div class="note" style="margin:16px 0 4px">Bulk expression in each sample, ${esc(bg.unit || 'log2(normalized count + 1)')}</div>${groupStrip(bulk, bg.unitShort || 'log2 normalized count', { width: 330, height: 190 })}` : pending ? '<p class="note" id="cmp-bulk-pending">Loading the per-sample values of this gene…</p>' : d.bulkAllUrl ? '<p class="note">The per-sample values of this gene could not be loaded.</p>' : '<p class="note">Per-sample values of this gene are in the results download.</p>'}
-      ${where}</div></section>`;
+      ${where}${geneLiterature(d, gene, { compact: true, id: 'cmp-gene-lit' })}</div></section>`;
 }
 async function drawVolcano() {
   const holder = $('#volcano'); if (!holder) return;
@@ -1298,7 +1376,7 @@ function viewAbout() {
         <h4>Metabolic pathways</h4><p>A graph-based model of the KEGG reaction network estimates the activity of ${num(d.counts.reactions || 1225)} metabolic reactions in every profile. A pathway's activity is the mean activity of its reactions, in relative units, averaged per cell type. Pathway maps are drawn from the KEGG reference pathways; each line is a reaction step of the model.</p></div>
       <div><h4>Signaling and functional pathways</h4><p>Gene sets from MSigDB v2026.2.Hs (Hallmark; Reactome release 97; WikiPathways 2026-10-10; GO Biological Process, GO release 2026-07-26) and PROGENy (14 pathways, 500 footprint genes each) are scored in every estimated profile with a univariate linear model (t-value; decoupler method) on log(1 + counts per 10,000), then averaged per sample and cell type. Top genes are the member genes that contribute most to the score in each cell type.</p>
         <h4>Group comparison</h4><p>Bulk counts: DESeq2 (PyDESeq2 0.5.4) with the patient as covariate, shrunken fold changes, Benjamini–Hochberg adjustment; fgsea multilevel enrichment of the Wald statistics (15–500 genes per set); PROGENy activity by a decoupler 2.2.0 multivariate linear model; estimated composition by a two-sided rank-sum test per cell type.</p>
-        <h4>Literature support</h4><p>${esc(lm?.name || 'Human pancreas literature')} index ${esc(lm?.version || '')}: ${num(lm?.papers)} ${esc(scopeInfo().noun)} with PubTator3 gene annotations${lsrc.genePapers ? ` (${esc(lsrc.genePapers)})` : ''}, matched to the enzymes of each reaction step; curated enzyme evidence from ${esc(lsrc.curated || 'UniProtKB/Swiss-Prot')}.</p></div>
+        <h4>Literature support</h4><p>${esc(lm?.name || 'Human pancreas literature')} index ${esc(lm?.version || '')}: ${num(lm?.papers)} ${esc(scopeInfo().noun)} with PubTator3 gene annotations${lsrc.genePapers ? ` (${esc(lsrc.genePapers)})` : ''}, matched to the enzymes of each reaction step; curated enzyme evidence from ${esc(lsrc.curated || 'UniProtKB/Swiss-Prot')}.</p>${DEMO().litGenesNote && d.origin === 'demo' ? `<p id="about-lit-genes">${esc(DEMO().litGenesNote)}</p>` : ''}</div>
     </div></div></section>
   <section class="card section"><div class="card-head"><div><div class="card-title">Reading the results</div></div></div><div class="card-body prose"><ul>${(demo.limitations || []).map(l => `<li>${esc(l)}</li>`).join('')}</ul></div></section>
   <section class="card section"><div class="card-head"><div><div class="card-title">Data credits</div><div class="card-sub">Public datasets used in this demo</div></div></div>
@@ -1623,7 +1701,7 @@ const ROW_KEYS = ['pathway', 'gs', 'litrow', 'samplePick', 'gene', 'cmpgene', 'c
 document.addEventListener('click', e => {
   const link = e.target.closest('a[href]');
   if (link && !link.dataset.view) return;   /* ordinary links (PubMed, KEGG, downloads) open without selecting the row */
-  const el = e.target.closest('[data-view],[data-action],[data-pathway],[data-type],[data-color],[data-gene],[data-figure],[data-src],[data-gscol],[data-gs],[data-gstype],[data-cmpcol],[data-cmpgene],[data-cmpset],[data-sort-table],[data-sample-pick],[data-space],[data-mapgroup],[data-heat-all],[data-heat-scale],[data-litfilter],[data-litrow],.modal-close,.menu-btn,.overlay');
+  const el = e.target.closest('[data-view],[data-action],[data-pathway],[data-type],[data-color],[data-gene],[data-figure],[data-src],[data-gscol],[data-gs],[data-gstype],[data-littype],[data-cmpcol],[data-cmpgene],[data-cmpset],[data-sort-table],[data-sample-pick],[data-space],[data-mapgroup],[data-heat-all],[data-heat-scale],[data-litfilter],[data-litrow],.modal-close,.menu-btn,.overlay');
   if (!el) return;
   if (el.classList.contains('overlay')) { if (e.target === el) closeModal(); return; }
   if (el.classList.contains('modal-close')) { closeModal(); return; }
@@ -1640,6 +1718,7 @@ document.addEventListener('click', e => {
   if (ds.litfilter) { state.lit.filter = ds.litfilter; rerenderLiterature(); return; }
   if (ds.litrow) { state.lit.conn = state.lit.conn === ds.litrow ? null : ds.litrow; rerenderLiterature(); if (!state.lit.conn && window.Plotly && $('#pathway-map')?.data) window.Plotly.relayout($('#pathway-map'), { shapes: [], annotations: [] }); return; }
   if (ds.gscol) { const k = ds.gscol; if (state.gs.on.has(k)) { if (state.gs.on.size > 1) state.gs.on.delete(k); } else state.gs.on.add(k); state.gs.limit = 60; rerender(); return; }
+  if (ds.littype) { state.lit.type = ds.littype; rerender(); return; }
   if (ds.gstype) { state.gs.type = ds.gstype; rerender(); return; }
   if (ds.gs) { state.gs.set = ds.gs; rerender(); return; }
   if (ds.cmpcol) { state.cmp.collection = ds.cmpcol; state.cmp.setLimit = 40; state.cmp.set = null; rerender(); return; }
