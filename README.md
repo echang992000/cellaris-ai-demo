@@ -27,7 +27,10 @@ Analyses of your own data run in a Cellaris workspace; contact Cellaris for a wo
   candidate hypotheses (predicted, not yet reported)
 - Signaling and functional pathways: activity of MSigDB Hallmark, PROGENy, Reactome, WikiPathways and
   GO Biological Process gene sets in each cell type and sample, with the database and version of every
-  set, the scoring method, the top genes in each cell type and an indicator of agreement across databases
+  set, the scoring method, the top genes in each cell type and an indicator of agreement across databases.
+  For a chosen gene set and cell type: the member genes that contribute most to the score in that cell
+  type with their expression relative to the other cell types, and the signaling pathway activity
+  (PROGENy) of that cell type
 - Group comparison (PDAC vs adjacent pancreas): differential expression with a volcano plot (every
   tested gene shows its mean normalized count and per-sample expression when selected), pathway
   enrichment, signaling pathway activity and composition by group, with each sample's fit to the

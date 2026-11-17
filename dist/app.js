@@ -59,7 +59,7 @@ function updateEstimate() { const el = $('#runtime-estimate'); if (el) el.textCo
 const state = {
   data: null, view: 'overview', colorBy: 'type', mapSpace: 'expression', sample: 'all', group: 'all', hidden: new Set(), pathway: null, heatType: null,
   search: '', category: 'all', gene: null, selSample: null, heatAll: false, heatScale: 'z',
-  gs: { on: new Set(['H', 'PROGENY']), search: '', set: null, limit: 60 },
+  gs: { on: new Set(['H', 'PROGENY']), search: '', set: null, limit: 60, type: null },
   cmp: { collection: 'H', setSearch: '', setLimit: 40, geneSearch: '', geneLimit: 60, gene: null, set: null, comp: null },
   lit: { conn: null, filter: 'genes' },
   sort: {}, groups: {}, demoRaw: null,
@@ -156,7 +156,7 @@ function prepare(raw, origin) {
     metabolic: result.metadata?.metabolicModel !== false, genesets, genesetsUrl: raw.genesetsUrl || null, comparison, comparisonUrl: raw.comparisonUrl || null,
     pathwayInfo: raw.pathwayInfo || {}, mapComparison: raw.mapComparison || null, glossary: raw.glossary || null,
     bulkExpression: raw.bulkExpression || result.bulkExpression || null, typeExpression: raw.typeExpression || result.typeExpression || null,
-    bulkAllUrl: raw.bulkAllUrl || null, bulkAll: null,
+    bulkAllUrl: raw.bulkAllUrl || null, bulkAll: null, genesetGenesUrl: raw.genesetGenesUrl || null, genesetGenes: null,
     download: raw.download || null, lazy: {},
   };
 }
@@ -963,9 +963,46 @@ function genesetDetail(g, s, m) {
     <div class="card-body"><div class="source-line">${icon('database')}<div><b>${esc(db.name)}</b> · ${esc(db.version)}<br>${setLinks(s).map(([n, u]) => `<a href="${esc(u)}" target="_blank" rel="noopener">View in ${esc(n)}</a>`).join(' · ')}</div></div>
       <div class="metrics small"><div class="metric"><small>Genes used</small><b>${num(s.genesUsed)} <span class="of">of ${num(s.libraryGenes)}</span></b></div><div class="metric"><small>Highest in</small><b>${esc(hi ? typeLabel(types[hi.i]) : '—')}</b></div><div class="metric"><small>Lowest in</small><b>${esc(lo ? typeLabel(types[lo.i]) : '—')}</b></div></div>
       <div class="note" style="margin:14px 0 4px">Mean activity by cell type</div>${bars}
+      ${genesetTypePlots(g, s)}
       ${tg ? `<div class="note" style="margin:6px 0 4px">Top genes in each cell type (highest activity first)</div><table class="table compact topgenes"><tbody>${tg.map(x => `<tr><td><span class="swatch" style="background:${typeColor(x.t, x.i)};margin-right:6px"></span>${esc(typeLabel(x.t))}</td><td><span class="genes">${esc(x.genes.join(', ') || '—')}</span></td></tr>`).join('')}</tbody></table><p class="note">${esc(g.topGenesDefinition || '')}</p>` : '<p class="note">Top genes are not available for this result.</p>'}
       ${CONSENSUS[s.consensus] ? `<p class="note">${esc(CONSENSUS[s.consensus][0])}: ${esc(consensusHelp(s.consensus))}.</p>` : ''}
       <div class="detail-sub"><div class="note" style="margin:10px 0 4px;display:flex;justify-content:space-between;align-items:center"><span>Activity in each sample and cell type</span>${s.perSample ? `<button class="link-btn" data-action="exportgssamples">${icon('download')} CSV</button>` : ''}</div>${perSamplePlot(g, s)}</div></div></section>`;
+}
+/* Gene plots of a gene set in one cell type (below the cell-type breakdown): the member genes that contribute most to the
+   score in that cell type, and the signaling pathway activity of that cell type. */
+function checkGenesetGenes(b) {
+  if (!b || !Array.isArray(b.genes) || !Array.isArray(b.expr) || b.expr.length !== b.genes.length || !Array.isArray(b.typeMean) || !Array.isArray(b.cellTypes) || !b.sets || typeof b.sets !== 'object') throw new Error('Invalid gene table.');
+  return b;
+}
+function setGenesInType(gg, s, type) {
+  const idx = gg.sets[s.id], ti = gg.cellTypes.indexOf(type); if (!idx || ti < 0) return [];
+  const w = gg.weights?.[s.id], wm = gg.wMean?.[s.id] || 0, n = gg.cellTypes.length;
+  return idx.map((gi, j) => {
+    const e = gg.expr[gi], c = ((w ? w[j] : 1) - wm) * (e[ti] - gg.typeMean[ti]); let o = 0;
+    for (let u = 0; u < n; u++) if (u !== ti) o += e[u];
+    o /= n - 1;
+    return { name: gg.genes[gi], c, v: (e[ti] - o) / Math.LN2, note: `expression ${sig(e[ti])} in this cell type, ${sig(o)} on average in the other cell types (log(1 + counts per 10,000))` };
+  }).filter(x => x.c > 0).sort((a, b) => b.c - a.c).slice(0, gg.k || 12);
+}
+function genesetTypePlots(g, s) {
+  const d = state.data, types = g.cellTypes, ok = types.map((t, i) => Number.isFinite(s.activity[i]));
+  if (!ok.some(Boolean)) return '';
+  let ti = types.indexOf(state.gs.type);
+  if (ti < 0 || !ok[ti]) ti = Number.isInteger(s.best) && s.best >= 0 ? s.best : ok.indexOf(true);
+  const t = types[ti], noun = typeNoun(t);
+  const picker = `<div class="toggle-chips" role="group" aria-label="Cell type for the gene plots" id="gs-type">${types.map((x, i) => (ok[i] ? `<button class="${i === ti ? 'active' : ''}" data-gstype="${esc(x)}" aria-pressed="${i === ti}"><span class="swatch" style="background:${typeColor(x, i)}"></span>${esc(typeLabel(x).replace(' (gamma)', ''))}</button>` : '')).join('')}</div>`;
+  const gg = d.genesetGenes, st = d.lazy.genesetGenes;
+  let genes;
+  if (gg) {
+    const items = setGenesInType(gg, s, t);
+    genes = items.length ? divergingBars(items, `Expression in ${noun} cells relative to the other cell types (log2)`, { labelWidth: 90, width: 300, row: 21 })
+      : '<p class="note">No member gene of this set contributes positively to the score in this cell type.</p>';
+  } else if (d.genesetGenesUrl && !String(st || '').startsWith('error')) { ensureLazy('genesetGenes', checkGenesetGenes); genes = '<p class="note">Loading the genes…</p>'; }
+  else genes = `<p class="note">${st ? `The genes could not be loaded (${esc(String(st).replace(/^error: /, ''))}).` : 'Gene-level values are not available for this result.'}</p>`;
+  const prog = (g.collections.PROGENY?.sets || []).filter(x => Number.isFinite(x.activity[ti])).map(x => ({ name: x.label, v: x.activity[ti], hi: x.id === s.id })).sort((a, b) => b.v - a.v);
+  return `<div class="detail-sub" id="gs-type-plots"><div class="note" style="margin:10px 0 6px">Genes and signaling in one cell type. Choose the cell type:</div>${picker}
+    <div class="note" style="margin:12px 0 4px" id="gs-genes-title">Genes of this set in ${esc(noun)} cells: the member genes that contribute most to the score there (the first five are the top genes listed below)</div><div id="gs-genes">${genes}</div>
+    ${prog.length ? `<div class="note" style="margin:12px 0 4px" id="gs-progeny-title">Signaling pathway activity in ${esc(noun)} cells (PROGENy, ${num(prog.length)} pathways${prog.some(x => x.hi) ? '; the selected pathway is highlighted' : ''})</div><div id="gs-progeny">${divergingBars(prog, 'Activity score (relative units)', { labelWidth: 100, width: 300, row: 21 })}</div>` : ''}</div>`;
 }
 function perSamplePlot(g, s) {
   if (!g.perSampleAvailable) return '<p class="note">Per-sample values are not available for this result: its estimated profiles do not carry sample-specific expression.</p>';
@@ -1215,7 +1252,7 @@ function mapComparisonCard(mc, isOwn) {
       <div class="metric"><small>Neighbors of the same cell type</small><b>${p(mc.purityExpression)} <span class="of">expression</span></b><b>${p(mc.purityMetabolic)} <span class="of">metabolic</span></b></div>
       <div class="metric"><small>Neighbors from the same sample</small><b>${p(mc.sameSampleMetabolic)}</b><span class="of">${p(mc.sameSampleMixed)} if samples were fully mixed</span></div>
       <div class="metric"><small>Pathway variation within cell types</small><b>${p(mc.withinShareMedian)}</b><span class="of">median over pathways (${p(mc.withinShareMin)}–${p(mc.withinShareMax)})</span></div></div>
-      <div style="margin-top:14px"><div class="prose two-col"><p><b>No: the two maps are related but organized differently.</b> On average ${p(mc.overlap)} of each profile's ${num(mc.k)} nearest neighbors are the same in both maps. Gene expression keeps every cell type apart, which makes the expression map the place to check cell-type assignments. The metabolic map groups cell types that share metabolic programs: the table shows which other types each cell type mixes with.</p>
+      <div style="margin-top:14px"><div class="prose two-col"><p><b>${mc.overlap < 0.1 ? 'No: the two maps are organized differently.' : 'No: the two maps are related but organized differently.'}</b> On average ${p(mc.overlap)} of each profile's ${num(mc.k)} nearest neighbors are the same in both maps${mc.copiesExcluded ? ` (${p(mc.overlapRandom)} expected by chance; profiles that derive from the same reference cell are not counted as neighbors)` : ''}. Gene expression keeps every cell type apart, which makes the expression map the place to check cell-type assignments. The metabolic map groups cell types that share metabolic programs: the table shows which other types each cell type mixes with.</p>
         <p><b>Why the metabolic map is useful.</b> For most pathways, most of the variation between profiles lies within cell types (median ${p(mc.withinShareMedian)}). The metabolic map arranges this variation into gradients: neighbors in the metabolic map have more similar pathway activity than neighbors in the expression map (median correlation ${sig(mc.autocorrMetabolicMedian)} vs ${sig(mc.autocorrExpressionMedian)}). Profiles of one cell type that sit apart in the metabolic map differ in estimated metabolism.</p>
         <ul class="plain"><li><b>Check cell types</b> in the expression map (Overview, Expression).</li><li><b>Find shared metabolic programs</b>: cell types that overlap in the metabolic map.</li><li><b>Find metabolic heterogeneity</b>: color the metabolic map by metabolic activity, or select a pathway in <a href="#pathways" data-view="pathways">Metabolic pathways</a>.</li></ul>
         <p class="note">Neighborhoods are computed in the full spaces (expression: ${esc(mc.expressionSpace || '')}; metabolic: ${esc(mc.metabolicSpace || '')}), not on the 2-D maps.${mc.layoutNote ? ` ${esc(mc.layoutNote)}` : ''} The metabolic map comes from the same model as the activity values, so their agreement is partly expected by construction.</p></div>
@@ -1586,7 +1623,7 @@ const ROW_KEYS = ['pathway', 'gs', 'litrow', 'samplePick', 'gene', 'cmpgene', 'c
 document.addEventListener('click', e => {
   const link = e.target.closest('a[href]');
   if (link && !link.dataset.view) return;   /* ordinary links (PubMed, KEGG, downloads) open without selecting the row */
-  const el = e.target.closest('[data-view],[data-action],[data-pathway],[data-type],[data-color],[data-gene],[data-figure],[data-src],[data-gscol],[data-gs],[data-cmpcol],[data-cmpgene],[data-cmpset],[data-sort-table],[data-sample-pick],[data-space],[data-mapgroup],[data-heat-all],[data-heat-scale],[data-litfilter],[data-litrow],.modal-close,.menu-btn,.overlay');
+  const el = e.target.closest('[data-view],[data-action],[data-pathway],[data-type],[data-color],[data-gene],[data-figure],[data-src],[data-gscol],[data-gs],[data-gstype],[data-cmpcol],[data-cmpgene],[data-cmpset],[data-sort-table],[data-sample-pick],[data-space],[data-mapgroup],[data-heat-all],[data-heat-scale],[data-litfilter],[data-litrow],.modal-close,.menu-btn,.overlay');
   if (!el) return;
   if (el.classList.contains('overlay')) { if (e.target === el) closeModal(); return; }
   if (el.classList.contains('modal-close')) { closeModal(); return; }
@@ -1603,6 +1640,7 @@ document.addEventListener('click', e => {
   if (ds.litfilter) { state.lit.filter = ds.litfilter; rerenderLiterature(); return; }
   if (ds.litrow) { state.lit.conn = state.lit.conn === ds.litrow ? null : ds.litrow; rerenderLiterature(); if (!state.lit.conn && window.Plotly && $('#pathway-map')?.data) window.Plotly.relayout($('#pathway-map'), { shapes: [], annotations: [] }); return; }
   if (ds.gscol) { const k = ds.gscol; if (state.gs.on.has(k)) { if (state.gs.on.size > 1) state.gs.on.delete(k); } else state.gs.on.add(k); state.gs.limit = 60; rerender(); return; }
+  if (ds.gstype) { state.gs.type = ds.gstype; rerender(); return; }
   if (ds.gs) { state.gs.set = ds.gs; rerender(); return; }
   if (ds.cmpcol) { state.cmp.collection = ds.cmpcol; state.cmp.setLimit = 40; state.cmp.set = null; rerender(); return; }
   if (ds.cmpgene) { state.cmp.gene = ds.cmpgene; rerender(); return; }
