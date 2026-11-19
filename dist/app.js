@@ -36,7 +36,7 @@ const FALLBACK = ['#4e79a7', '#f28e2b', '#59a14f', '#b07aa1', '#76b7b2', '#edc94
 const typeLabel = n => TYPE_STYLE[n]?.[0] || String(n).replace(/_/g, ' ').replace(/^./, c => c.toUpperCase());
 const typeColor = (n, i = 0) => TYPE_STYLE[n]?.[1] || FALLBACK[i % FALLBACK.length];
 const typeNoun = n => { const l = typeLabel(n); return /^[A-Z]{2}/.test(l) ? l : l.charAt(0).toLowerCase() + l.slice(1); };
-const VIEWS = { overview: 'Overview', samples: 'Samples', genes: 'Gene expression', compare: 'Compare groups', signaling: 'Signaling pathways', pathways: 'Metabolic pathways', figures: 'Figures', about: 'About' };
+const VIEWS = { overview: 'Overview', samples: 'Samples', genes: 'Gene expression', compare: 'Bulk signaling', signaling: 'Cell-type signaling', pathways: 'Metabolic pathways', figures: 'Figures', about: 'About' };
 const SCHEDULES = {
   quick: { label: 'Quick', note: 'Fastest; suited to a first look', t1: 300, t2: 100 },
   standard: { label: 'Standard', note: 'Recommended for final results', t1: 1000, t2: 1000 },
@@ -64,6 +64,7 @@ const state = {
   cmp: { collection: 'H', setSearch: '', setLimit: 40, geneSearch: '', geneLimit: 60, gene: null, set: null, comp: null },
   lit: { conn: null, filter: 'genes' },
   sort: {}, groups: {}, demoRaw: null,
+  compView: 'samples', healthyView: 'markers', lookup: { q: '', gene: null, all: false }, spatial: { section: null, regions: false },
   worker: { url: localStorage.getItem('cellaris-worker-url') || '', token: '', ready: false, info: null },
   job: null, polling: false, bulk: null, bulkInfo: null,
 };
@@ -159,6 +160,7 @@ function prepare(raw, origin) {
     bulkExpression: raw.bulkExpression || result.bulkExpression || null, typeExpression: raw.typeExpression || result.typeExpression || null,
     bulkAllUrl: raw.bulkAllUrl || null, bulkAll: null, genesetGenesUrl: raw.genesetGenesUrl || null, genesetGenes: null,
     geneLitUrl: raw.geneLitUrl || null, geneLit: null, genesetLitUrl: raw.genesetLitUrl || null, genesetLit: null, celltypeLitUrl: raw.celltypeLitUrl || null, celltypeLit: null,
+    geneLookupUrl: raw.geneLookupUrl || null, geneLookup: null, geneTumorUrl: raw.geneTumorUrl || null, geneTumor: null, spatialUrl: raw.spatialUrl || null, spatial: null, spatialChunks: {}, healthyUrl: raw.healthyUrl || null, healthy: null,
     download: raw.download || null, lazy: {},
   };
 }
@@ -182,8 +184,9 @@ function heat(v, lo, hi) {
 }
 const groupNames = d => d.comparison ? [d.comparison.test, d.comparison.reference] : [];
 const groupColor = (d, g) => { const i = groupNames(d).indexOf(g); return i >= 0 ? GROUP_COLOR[i] : '#667085'; };
-/* Group of samples shown on the overview map ('all' or one of the two compared groups). Display filter only. */
-const mapGroup = d => (groupNames(d).includes(state.group) ? state.group : 'all');
+const HEALTHY = 'Healthy reference cells';
+/* Group shown in color on the map ('all', one of the two compared groups, or the healthy reference cells). Display filter only. */
+const mapGroup = d => (groupNames(d).includes(state.group) || (state.group === HEALTHY && d.healthy?.referenceCells) ? state.group : 'all');
 const inMapGroup = (d, sampleId) => { const g = mapGroup(d); return g === 'all' || d.comparison?.samples?.[sampleId] === g; };
 
 /* ---------- Layout ---------- */
@@ -210,10 +213,11 @@ function render() {
   const back = $('#demo-return'); if (back) back.classList.toggle('hidden', d.origin === 'demo');
   const views = { overview: viewOverview, samples: viewSamples, pathways: viewPathways, signaling: viewSignaling, compare: viewCompare, genes: viewGenes, figures: viewFigures, about: viewAbout };
   $('#view').innerHTML = views[state.view]();
-  if (state.view === 'overview') drawEmbedding();
-  if (state.view === 'samples') drawEmbedding('.embedding.mini', { sampleOnly: state.selSample });
+  if (state.view === 'samples') { drawEmbedding(); drawEmbedding('.embedding.mini', { sampleOnly: state.selSample }); }
   if (state.view === 'pathways' && d.metabolic) { drawPathwayHeatmap(); loadPathwayMap(); loadLiterature(); }
-  if (state.view === 'compare' && d.comparison) { drawVolcano(); loadBulkAll(); }
+  if (state.view === 'genes' && d.comparison) { drawVolcano(); loadBulkAll(); }
+  drawSpatial();
+  const bl = $('#build-label'); if (bl) bl.textContent = d.origin === 'demo' && DEMO().build?.label ? ` · ${DEMO().build.label}` : '';
 }
 
 /* ---------- Shared: key terms ---------- */
@@ -240,10 +244,6 @@ function glossary(d, { compact = false } = {}) {
 /* ---------- Overview ---------- */
 function viewOverview() {
   const d = state.data, c = d.comparison, isDemo = d.origin === 'demo', f = cohortFacts(d);
-  const samples = [...new Set(d.cells.map(x => x.sample))];
-  const mapGroups = groupNames(d).filter(g => samples.some(s => d.comparison?.samples?.[s] === g)), mg = mapGroup(d);
-  const shownSamples = samples.filter(s => inMapGroup(d, s)), shownCells = mg === 'all' ? d.cells.length : d.cells.filter(x => inMapGroup(d, x.sample)).length;
-  if (state.sample !== 'all' && !shownSamples.includes(state.sample)) state.sample = 'all';
   const banner = isDemo
     ? `<div class="banner">${icon('info')}<div><b>Demo dataset.</b> ${esc(DEMO().bannerText || 'Public data analyzed with Cellaris.')}</div><div class="controls banner-actions"><button class="btn btn-primary" data-action="new">Analyze your data</button></div></div>`
     : `<div class="banner">${icon('info')}<div><b>${d.origin === 'job' ? 'Computed analysis.' : 'Imported analysis.'}</b> Results for ${esc(d.title)} from your Cellaris workspace.</div><button class="btn btn-secondary" data-action="demo">Return to the PDAC demo</button></div>`;
@@ -257,33 +257,164 @@ function viewOverview() {
   ].map(([k, v, ft]) => `<div class="card kpi"><div class="k-label">${esc(k)}</div><div class="k-value">${num(v)}</div><div class="k-foot">${esc(ft)}</div></div>`).join('');
   const flow = d.metabolic ? ['Bulk RNA-seq samples', 'Cell-type composition', 'Estimated single-cell profiles', 'Metabolic and signaling activity', c ? 'Group comparison (bulk)' : 'Pathway insights']
     : ['Bulk RNA-seq samples', 'Cell-type composition', c ? 'Group comparison' : 'Estimated single-cell profiles', 'Pathway enrichment'];
-  const hasExpr = d.cells.some(x => Number.isFinite(x.ex));
-  const space = hasExpr && state.mapSpace === 'expression' ? 'expression' : 'metabolic';
-  const mapCard = d.metabolic ? `<section class="card"><div class="card-head"><div><div class="card-title">${space === 'expression' ? 'Expression map' : 'Metabolic map'}</div><div class="card-sub">Each point is one estimated single-cell profile, placed by ${space === 'expression' ? 'similarity of gene expression' : 'similarity of estimated metabolic activity'} (UMAP; axes have no units)</div></div>
-      <div class="controls">${hasExpr ? `<div class="segmented" role="group" aria-label="Map"><button class="${space === 'expression' ? 'active' : ''}" data-space="expression">Expression</button><button class="${space === 'metabolic' ? 'active' : ''}" data-space="metabolic">Metabolic</button></div>` : ''}
-      <div class="segmented" role="group" aria-label="Color"><button class="${state.colorBy === 'type' ? 'active' : ''}" data-color="type">Cell type</button><button class="${state.colorBy === 'score' ? 'active' : ''}" data-color="score">Metabolic activity</button></div>
-      ${mapGroups.length ? `<div class="segmented" role="group" aria-label="Samples shown on the map"><button class="${mg === 'all' ? 'active' : ''}" data-mapgroup="all">All samples</button>${mapGroups.map(g => `<button class="${mg === g ? 'active' : ''}" data-mapgroup="${esc(g)}">${esc(g)}</button>`).join('')}</div>` : ''}
-      <select class="select" id="sample-select" aria-label="Show the profiles of one sample"><option value="all">${mg === 'all' ? 'All samples' : `All ${esc(mg)} samples`}</option>${shownSamples.map(s => `<option value="${esc(s)}" ${state.sample === s ? 'selected' : ''}>${esc(sampleLabel(s))}</option>`).join('')}</select></div></div>
-      <div class="card-body"><div class="embed-wrap"><svg class="embedding main" viewBox="0 0 640 400" data-w="640" data-h="400" role="img" aria-label="Map of estimated single-cell profiles"></svg><div class="tip hidden"></div></div>
-      <div class="legend">${d.cellTypes.map(t => `<button class="${state.hidden.has(t.name) ? 'off' : ''}" data-type="${esc(t.name)}"><span class="swatch" style="background:${t.color}"></span>${esc(t.label)}</button>`).join('')}</div></div>
-      <div class="card-foot"><span id="map-count">${mg === 'all' ? (d.cells.length < d.counts.cells ? `Showing ${num(d.cells.length)} of ${num(d.counts.cells)} estimated profiles (a random subset)` : `Showing all ${num(d.cells.length)} estimated profiles`) : `Showing ${num(shownCells)} of the ${num(d.cells.length)} displayed profiles: those estimated from the ${num(shownSamples.length)} ${esc(mg)} samples. The filter changes the map only; cell-type values on this site summarize all samples.`}${hasExpr && mg === 'all' ? ' · both maps show the same profiles' : ''}</span>${d.figures.length ? '<button class="link-btn" data-view="figures">How to read this map →</button>' : '<span>Select a cell type to hide it</span>'}</div></section>`
-    : `<section class="card"><div class="card-head"><div><div class="card-title">${c ? 'Group comparison' : 'Analysis without the metabolic model'}</div></div></div><div class="card-body prose"><p>The metabolic model was not run for this analysis, so KEGG pathway activity, the metabolic map and literature support are not available.</p><div class="controls">${c ? '<button class="btn btn-primary" data-view="compare">Open the comparison</button>' : ''}</div></div></section>`;
-  const groups = groupNames(d);
-  const compRows = groups.length && d.samples.some(s => s.meta?.Group)
-    ? groups.map(g => ({ g, comp: meanComposition(d, s => s.meta?.Group === g), n: d.samples.filter(s => s.meta?.Group === g).length }))
-    : [{ g: null, comp: meanComposition(d), n: d.samples.length }];
-  const order = compRows[0].comp.map(t => t.name);
-  const compCard = `<section class="card"><div class="card-head"><div><div class="card-title">Cell-type composition</div><div class="card-sub">Mean estimated fraction of cells${groups.length ? ' in each group of samples' : ` across ${plural(d.samples.length, 'sample')}`} (%)</div></div></div>
-    <div class="card-body">${compRows.map(r => `<div class="comp-group">${r.g ? `<div class="comp-label"><span class="swatch" style="background:${groupColor(d, r.g)}"></span><b>${esc(r.g)}</b> <small>${plural(r.n, 'sample')}</small></div>` : ''}<div class="stack">${order.map(name => { const t = r.comp.find(x => x.name === name); return `<span style="width:${(t.share * 100).toFixed(2)}%;background:${t.color}" title="${esc(t.label)} ${pct(t.share)}"></span>`; }).join('')}</div></div>`).join('')}
-    <table class="table comp-table"><thead><tr><th>Cell type</th>${compRows.map(r => `<th class="num">${esc(r.g || 'Mean')}</th>`).join('')}</tr></thead><tbody>${order.map(name => { const t = compRows[0].comp.find(x => x.name === name); return `<tr><td><span class="swatch" style="background:${t.color};margin-right:6px"></span>${esc(t.label)}</td>${compRows.map(r => `<td class="num">${pct(r.comp.find(x => x.name === name).share)}</td>`).join('')}</tr>`; }).join('')}</tbody></table></div>
-    <div class="card-foot"><span>Fractions sum to 100% in each sample</span><button class="link-btn" data-view="samples">Per-sample view →</button></div></section>`;
   return `${pageHead(isDemo ? 'Demo analysis' : 'Analysis', d.title, esc(d.description || d.subtitle))}
   ${banner}${oodBanner(d)}
   <div class="flow">${flow.map(x => `<span>${x}</span>`).join('<i>→</i>')}</div>
   <div class="grid kpis">${kpis}</div>
-  <div class="grid two section">${mapCard}${compCard}</div>
-  ${d.metabolic ? `<div class="section">${pathwayTable(8)}</div>` : ''}
+  ${lookupCard(d)}
+  ${c ? differencesSection(d, c) : ''}
+  ${d.metabolic ? `<div class="section">${pathwayTable(5)}</div>` : ''}
+  <div class="section">${exploreCard(d)}</div>
   <div class="section">${glossary(d)}</div>`;
+}
+/* Where each result lives (the map and the composition are on the Samples tab). */
+function exploreCard(d) {
+  const c = d.comparison, items = [
+    ['samples', 'Samples', `The map of the estimated profiles, the cell-type composition of every sample${c?.composition ? ' and of each group' : ''}${d.healthyUrl || d.healthy ? ', and the comparison with healthy pancreas' : ''}.`],
+    ['genes', 'Gene expression', `${c ? 'Differential expression between the groups (volcano plot and gene table) and marker' : 'Marker'} genes across cell types.`],
+    ...(c ? [['compare', 'Bulk signaling', 'Pathway enrichment, signaling pathway activity and themes that agree across databases, between the groups of bulk samples.']] : []),
+    ['signaling', 'Cell-type signaling', 'Activity of signaling and functional gene sets in each cell type, with their genes and literature support.'],
+    ...(d.metabolic ? [['pathways', 'Metabolic pathways', 'Estimated activity of KEGG metabolic pathways in each cell type, with pathway maps and literature support.']] : []),
+  ];
+  return `<section class="card" id="explore"><div class="card-head"><div><div class="card-title">Where to look next</div><div class="card-sub">Each tab answers one question</div></div></div>
+    <div class="card-body"><dl class="terms">${items.map(([v, k, t]) => `<div><dt><button type="button" class="link-btn" data-view="${v}">${esc(k)} →</button></dt><dd>${esc(t)}</dd></div>`).join('')}</dl></div></section>`;
+}
+/* Overview summary of the group comparison: the largest differences, each linking to its tab. */
+function ovGenes(c, dir, n = 6) {
+  return c.de.table.filter(x => x.direction === dir && Number.isFinite(x.padj)).sort((a, b) => a.padj - b.padj || Math.abs(b.log2FCShrunk) - Math.abs(a.log2FCShrunk)).slice(0, n);
+}
+function ovSets(c, sign, n = 5) {
+  const P = c.pathways || {}, k = ['H', 'REACTOME', 'WIKIPATHWAYS', 'GOBP'].find(x => P.collections?.[x]?.sets?.length);
+  if (!k) return { k: null, rows: [] };
+  return { k, rows: P.collections[k].sets.filter(r => r.padj < 0.05 && Math.sign(r.nes) === sign).sort((a, b) => Math.abs(b.nes) - Math.abs(a.nes)).slice(0, n) };
+}
+function differencesSection(d, c) {
+  const t = esc(c.test), r = esc(c.reference), s = c.de.summary || {}, up = ovGenes(c, 'up'), down = ovGenes(c, 'down'), su = ovSets(c, 1), sd = ovSets(c, -1);
+  const gRow = x => `<tr class="clickable" data-ovgene="${esc(x.gene)}"><td><button type="button" class="name-link gene" data-ovgene="${esc(x.gene)}">${esc(x.gene)}</button></td><td class="num"><span class="heat" style="${diverge(x.log2FCShrunk, 4)}">${sig(x.log2FCShrunk)}</span></td><td class="num">${fmtP(x.padj)}</td></tr>`;
+  const gTable = (rows, title) => `<div class="note" style="margin:10px 0 4px">${title}</div><table class="table compact"><thead><tr><th>Gene</th><th class="num" title="Shrunken log2 fold change, ${t} vs ${r}">log2 fold change</th><th class="num">Adjusted p</th></tr></thead><tbody>${rows.map(gRow).join('') || '<tr><td colspan="3" class="empty">None.</td></tr>'}</tbody></table>`;
+  const sRow = k => x => `<tr class="clickable" data-ovset="${esc(x.id)}" data-ovcol="${k}"><td><button type="button" class="name-link" data-ovset="${esc(x.id)}" data-ovcol="${k}">${esc(x.label)}</button></td><td class="num"><span class="heat" style="${diverge(x.nes, 3)}">${sig(x.nes)}</span></td><td class="num">${fmtP(x.padj)}</td></tr>`;
+  const sTable = (o, title) => `<div class="note" style="margin:10px 0 4px">${title}</div><table class="table compact"><thead><tr><th>Gene set</th><th class="num" title="Normalized enrichment score">Score</th><th class="num">Adjusted p</th></tr></thead><tbody>${o.rows.map(sRow(o.k)).join('') || '<tr><td colspan="3" class="empty">None.</td></tr>'}</tbody></table>`;
+  const prog = (c.pathways?.progeny || []).filter(x => x.padj < 0.05).sort((a, b) => b.score - a.score);
+  const progLine = prog.length ? `<p class="note" id="ov-progeny">Signaling pathways with a different activity (PROGENy, adjusted p < 0.05): ${prog.map(x => `${esc(x.label)} ${x.score > 0 ? '↑' : '↓'}`).join(', ')}.</p>` : '';
+  const comp = c.composition?.table ? [...c.composition.table].sort((a, b) => a.padj - b.padj) : null, nComp = comp ? comp.filter(x => x.padj < 0.05).length : 0;
+  const compCard = comp ? `<section class="card" id="ov-composition"><div class="card-head"><div><div class="card-title">Cell-type composition</div><div class="card-sub">${num(nComp)} of ${plural(comp.length, 'cell type')} differ in estimated fraction at adjusted p < 0.05</div></div></div>
+    <div class="card-body"><table class="table compact"><thead><tr><th>Cell type</th><th class="num" title="Median estimated fraction, percent">${t}</th><th class="num" title="Median estimated fraction, percent">${r}</th><th class="num" title="Difference of the medians, percentage points">Difference</th><th class="num">Adjusted p</th></tr></thead><tbody>${comp.map(x => `<tr${x.padj < 0.05 ? '' : ' class="faint"'}><td><span class="swatch" style="background:${typeColor(x.cell_type)};margin-right:6px"></span>${esc(typeLabel(x.cell_type))}</td><td class="num">${sig(x.median_test_pct)}</td><td class="num">${sig(x.median_reference_pct)}</td><td class="num">${x.median_difference_pp > 0 ? '+' : ''}${sig(x.median_difference_pp)}</td><td class="num">${fmtP(x.padj)}</td></tr>`).join('')}</tbody></table>
+    <p class="note">Median estimated fraction of cells (%) in each group. Tumor cells and cancer-associated fibroblasts have no reference type; their share is absorbed into the nearest types.</p></div>
+    <div class="card-foot"><span></span><button class="link-btn" data-view="samples">Map, samples and composition →</button></div></section>` : '';
+  return `<h2 class="section-title" id="ov-differences">Biggest differences: ${t} vs ${r}</h2>
+  <p class="note" style="margin:-4px 0 12px">From the comparison of the bulk samples. Select a gene or a gene set to open it in its tab.</p>
+  <div class="grid three">
+    <section class="card" id="ov-genes"><div class="card-head"><div><div class="card-title">Genes</div><div class="card-sub">${num(s.n_sig)} genes differ at adjusted p < 0.05 (${num(s.n_sig_up)} higher, ${num(s.n_sig_down)} lower in ${t}); the most significant are listed</div></div></div>
+      <div class="card-body">${gTable(up, `Higher in ${t}`)}${gTable(down, `Lower in ${t}`)}</div>
+      <div class="card-foot"><span></span><button class="link-btn" data-view="genes">Volcano plot and all genes →</button></div></section>
+    <section class="card" id="ov-pathways"><div class="card-head"><div><div class="card-title">Pathways</div><div class="card-sub">${su.k ? `${esc(GS_LABEL[su.k])} gene sets with the strongest enrichment (adjusted p < 0.05)` : 'Pathway enrichment is not available'}</div></div></div>
+      <div class="card-body">${su.k ? sTable(su, `Higher in ${t}`) + sTable(sd, `Lower in ${t}`) : ''}${progLine}</div>
+      <div class="card-foot"><span></span><button class="link-btn" data-view="compare">All databases and signaling activity →</button></div></section>
+    ${compCard}
+  </div>
+  ${(c.pathways?.themes || []).length ? `<div class="section">${themesCard(c, { limit: 8 })}</div>` : ''}`;
+}
+
+/* ---------- Target lookup (Overview): one gene, everything the analysis shows for it ---------- */
+function checkLookup(b) {
+  if (!b || !Array.isArray(b.genes) || !b.de || !Array.isArray(b.typeExpr) || b.typeExpr.length !== b.genes.length || !b.sets || !Array.isArray(b.geneSetsDelta)) throw new Error('Invalid lookup table.');
+  const key = s => String(s).toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const index = new Map(b.genes.map((g, i) => [g, i])), lc = new Map(b.genes.map(g => [g.toLowerCase(), g])), byKey = new Map();
+  for (const g of b.genes) { const k = key(g); byKey.set(k, byKey.has(k) ? null : g); }   /* null: two symbols share the key */
+  return { ...b, index, lc, byKey, key, aliasKeys: Object.keys(b.aliases || {}) };
+}
+/* Resolve a typed name: exact symbol (any case), then the symbol's letters and digits, then a unique alias, then an ambiguous alias. */
+function lookupFind(L, q) {
+  const raw = String(q || '').trim(), K = L.key(raw);
+  if (!K) return { exact: null, via: null, matches: [], ambiguous: null };
+  const sym = L.lc.get(raw.toLowerCase()) || L.byKey.get(K) || null, a = sym ? null : L.aliases?.[K], al = a && L.index.has(a) ? a : null, matches = [];
+  if (K.length >= 2) {
+    for (const [k, g] of L.byKey) if (g && k.startsWith(K)) matches.push([g, null]);
+    matches.sort((x, y) => x[0].length - y[0].length || x[0].localeCompare(y[0]));
+    matches.length = Math.min(matches.length, 8);
+    if (matches.length < 8) for (const k of L.aliasKeys) { const g = L.aliases[k]; if (k.startsWith(K) && L.index.has(g) && !matches.some(m => m[0] === g)) matches.push([g, k]); if (matches.length >= 8) break; }
+  }
+  return { exact: sym || al, via: al ? raw : null, matches, ambiguous: sym || al ? null : (L.ambiguousAliases?.[K] || null) };
+}
+function enrichmentIndex(c) {
+  if (!c) return new Map();
+  if (!c._enr) { c._enr = new Map(); for (const [k, col] of Object.entries(c.pathways?.collections || {})) for (const r of col.sets || []) c._enr.set(r.id, { nes: r.nes, padj: r.padj, col: k }); for (const r of c.pathways?.progeny || []) if (!c._enr.has(r.id)) c._enr.set(r.id, { nes: r.score, padj: r.padj, col: 'PROGENY', progeny: true }); }
+  return c._enr;
+}
+function lookupCard(d) {
+  if (!d.geneLookupUrl && !d.geneLookup) return '';
+  const q = state.lookup.q, L = d.geneLookup, st = String(d.lazy.geneLookup || ''), active = !!(q || state.lookup.gene);
+  const ex = (DEMO().lookupExamples || []).map(g => `<button data-lookup="${esc(g)}">${esc(g)}</button>`).join('');
+  let body;
+  if (!active) body = '<p class="note" id="lookup-hint">Type a gene symbol or a common name. The panel gathers the result of the bulk comparison, the estimated expression by cell type, the pathways that contain the gene, the cell types that express it in public single-cell tumor data, and its literature support.</p>';
+  else if (!L) {
+    if (!st.startsWith('error')) ensureLazy('geneLookup', checkLookup);
+    body = `<p class="note">${st.startsWith('error') ? `The lookup table could not be loaded (${esc(st.replace(/^error: /, ''))}).` : 'Loading the lookup table…'}</p>`;
+  } else {
+    const f = lookupFind(L, q), picked = state.lookup.gene && L.index.has(state.lookup.gene) ? state.lookup.gene : null, gene = picked || f.exact;
+    const via = gene && f.exact === gene ? f.via : null;
+    const chips = f.matches.filter(m => m[0] !== gene).map(([g, a]) => `<button data-lookup="${esc(g)}">${esc(g)}${a ? `<small>${esc(a)}</small>` : ''}</button>`).join('');
+    const amb = f.ambiguous && !picked ? `<p class="note" id="lookup-ambiguous">“${esc(q.trim())}” can mean more than one gene: ${f.ambiguous.map(g => (L.index.has(g) ? `<button type="button" class="link-btn" data-lookup="${esc(g)}">${esc(g)}</button>` : esc(g))).join(', ')}. Choose one.</p>` : '';
+    body = `${chips ? `<div class="toggle-chips" id="lookup-matches" role="group" aria-label="Matching genes" style="margin-top:10px">${chips}</div>` : ''}${amb}${gene ? lookupPanel(d, L, gene, via) : (!chips && !amb ? `<p class="note" id="lookup-none">“${esc(q.trim())}” is not among the ${num(L.genes.length)} genes tested in this analysis. Either its expression was too low in these samples to be tested, or the name is not a known gene symbol or common name.</p>` : '')}`;
+  }
+  return `<section class="card section" id="lookup"><div class="card-head"><div><div class="card-title">Look up a gene or target</div><div class="card-sub">Everything this analysis shows for one gene, on one panel</div></div></div>
+    <div class="card-body"><div class="controls"><label class="search">${icon('search')}<input class="input" id="lookup-input" type="search" placeholder="Gene symbol or common name" value="${esc(q)}" aria-label="Look up a gene or target" autocomplete="off" spellcheck="false"></label>${ex ? `<span class="note" style="margin:0">For example</span><div class="toggle-chips" id="lookup-examples">${ex}</div>` : ''}</div>${body}</div></section>`;
+}
+function lookupPanel(d, L, sym, via) {
+  const i = L.index.get(sym), c = d.comparison, lt = L.cellTypes || d.cellTypes.map(t => t.name);
+  const lfc = L.de.lfc?.[i], padj = L.de.padj?.[i], bm = L.de.baseMean?.[i], dv = L.de.dir?.[i], tested = Number.isFinite(lfc);
+  const dir = dv === 1 ? 'up' : dv === -1 ? 'down' : 'ns';
+  const bulk = c ? (tested
+    ? `<div class="metrics small"><div class="metric"><small>Shrunken log2 fold change</small><b>${sig(lfc)}</b></div><div class="metric"><small>Adjusted p</small><b>${fmtP(padj)}</b></div><div class="metric"><small>Mean normalized count</small><b>${Number.isFinite(bm) ? num(bm, 0) : '—'}</b></div></div><p class="note" id="lookup-call"><b>${dir === 'up' ? `Higher in ${esc(c.test)}` : dir === 'down' ? `Lower in ${esc(c.test)}` : 'No clear difference'}</b> between the bulk samples (${esc(c.test)} vs ${esc(c.reference)}). Higher or lower means adjusted p below 0.05 and at least a 2-fold change. A tissue-level difference can come from a change in which cells make up the tissue, from a change within cells, or both.</p>`
+    : '<p class="note">This gene was not tested in the bulk comparison.</p>') : '';
+  const te = L.typeExpr[i];
+  let where;
+  if (Array.isArray(te)) {
+    const vals = te.map((v, k) => ({ v, n: lt[k] })).filter(x => Number.isFinite(x.v)).sort((a, b) => b.v - a.v), vmax = Math.max(...vals.map(x => x.v), 1e-9);
+    where = vals.map(x => `<div class="hbar"><span>${esc(typeLabel(x.n))}</span><span class="track"><i style="width:${(Math.max(0, x.v) / vmax * 100).toFixed(1)}%;background:${typeColor(x.n)}"></i></span><b>${sig(x.v)}</b></div>`).join('')
+      + '<p class="note">Estimated from the bulk samples with the healthy pancreas reference. Tumor cells are not a reference cell type, so expression that comes from tumor cells is spread over the healthy types, mostly ductal.</p>';
+  } else where = '<p class="note">Not available: this gene is not among the genes shared with the healthy reference.</p>';
+  let acc = 0;
+  const si = (L.geneSetsDelta[i] || []).map(x => (acc += x)), lead = new Set((L.leadingPos?.[i] || []).map(p => si[p])), enr = enrichmentIndex(c);
+  const rows = si.map(j => { const id = L.sets.id[j], e = enr.get(id) || null, nes = L.sets.nes?.[j] ?? (e ? e.nes : null), p = L.sets.padj?.[j] ?? (e ? e.padj : null); return { id, col: L.sets.collection[j], label: L.sets.label[j], lead: lead.has(j), nes, padj: p, top: L.sets.topType?.[j] ?? null, onSite: !!e && !e.progeny }; })
+    .sort((a, b) => (b.lead - a.lead) || ((b.padj !== null && b.padj < 0.05) - (a.padj !== null && a.padj < 0.05)) || (Math.abs(b.nes || 0) - Math.abs(a.nes || 0)) || GS_ORDER.indexOf(a.col) - GS_ORDER.indexOf(b.col) || a.label.localeCompare(b.label));
+  const shown = state.lookup.all ? rows : rows.slice(0, 10);
+  const setRows = shown.map(x => `<tr><td>${esc(x.label)}<small>${esc(x.id)}</small></td><td><span class="badge db-${String(x.col).toLowerCase()}">${esc(GS_LABEL[x.col] || x.col)}</span></td><td class="num">${Number.isFinite(x.nes) ? `<span class="heat" style="${diverge(x.nes, 3)}">${sig(x.nes)}</span>` : '—'}</td><td class="num">${Number.isFinite(x.padj) ? fmtP(x.padj) : '—'}</td><td>${x.lead ? '<span class="badge accent" title="Among the leading-edge genes: the genes that drive this set\u2019s enrichment in the bulk comparison">drives the score</span>' : ''}</td><td>${x.top !== null && lt[x.top] ? esc(typeLabel(lt[x.top])) : '—'}</td><td class="nowrap">${x.onSite ? `<button type="button" class="link-btn" data-ovset="${esc(x.id)}" data-ovcol="${esc(x.col)}">Bulk</button>` : ''}${x.top !== null ? ` <button type="button" class="link-btn" data-gsjump="${esc(x.id)}" data-gscolj="${esc(x.col)}">Cell types</button>` : ''}</td></tr>`).join('');
+  const sets = si.length ? `<div class="table-wrap" style="max-height:380px" data-scroll-id="lookup-sets"><table class="table compact" id="lookup-sets"><thead><tr><th>Gene set</th><th>Database</th><th class="num" title="Enrichment score of the whole set in the bulk comparison (PROGENy: pathway activity score)">Bulk score</th><th class="num">Adjusted p</th><th></th><th title="Cell type with the highest estimated activity of the whole set, not of this gene">Highest in</th><th>Open</th></tr></thead><tbody>${setRows}</tbody></table></div>${rows.length > shown.length ? `<button class="link-btn" data-action="lookupall">Show all ${num(rows.length)} gene sets</button>` : ''}<p class="note">Membership comes from the gene-set databases, not from this data. Bulk score and highest cell type describe the whole set.</p>`
+    : '<p class="note">Not a member of any gene set shown on this site.</p>';
+  const kegg = (L.kegg?.[i] || []).map(id => d.pathways.find(p => p.id === id)).filter(Boolean), notScored = (L.keggNotScored || []).includes(sym);
+  const keggLine = kegg.length ? `<div class="note" style="margin:14px 0 6px"><b style="color:var(--ink-2)">Metabolic pathways</b> · enzyme gene in</div><div class="chips" id="lookup-kegg">${kegg.map(p => `<button type="button" class="chip link" data-pathway="${esc(p.id)}">${esc(p.name)}</button>`).join('')}</div>${notScored ? '<p class="note">This gene was not used to estimate the activity of these pathways.</p>' : ''}` : '';
+  const also = (L.symbolAlsoAlias?.[sym] || []).filter(g => L.index.has(g));
+  return `<div id="lookup-panel" class="detail-sub" data-lookup-gene="${esc(sym)}"><div class="lookup-head"><div><span class="card-title"><i>${esc(sym)}</i></span>${via ? ` <span class="note" style="margin:0" id="lookup-via">“${esc(via)}” is listed as a name of ${esc(sym)}</span>` : ''}${also.length ? ` <span class="note" style="margin:0" id="lookup-also">${esc(sym)} is also used as a name for ${also.map(g => `<button type="button" class="link-btn" data-lookup="${esc(g)}">${esc(g)}</button>`).join(', ')}</span>` : ''}</div><div class="controls">${c ? `<button class="btn btn-secondary" data-ovgene="${esc(sym)}">Open in Gene expression</button>` : ''}<a class="badge" href="https://www.ncbi.nlm.nih.gov/gene/?term=${encodeURIComponent(sym)}%5Bsym%5D+AND+human%5Borgn%5D" target="_blank" rel="noopener">NCBI Gene</a></div></div>
+    <div class="grid halves" style="margin-top:12px"><div>
+      ${c ? `<div class="note" style="margin:0 0 6px"><b style="color:var(--ink-2)">Bulk comparison</b></div>${bulk}` : ''}
+      <div class="note" style="margin:16px 0 6px"><b style="color:var(--ink-2)">Cell types</b> · estimated expression in the healthy reference cell types, log(1 + counts per 10,000)</div>${where}
+      ${tumorNote(d, sym, { full: true })}</div>
+    <div><div class="note" style="margin:0 0 6px"><b style="color:var(--ink-2)">Pathways</b> · member of ${plural(rows.length, 'gene set')} shown on this site${rows.some(x => x.lead) ? '; sets whose bulk enrichment it drives come first' : ''}</div>${sets}${keggLine}
+      ${geneLiterature(d, sym, { compact: true, id: 'lookup-lit' })}</div></div></div>`;
+}
+/* Where a gene is expressed in real tumors (public single-cell data of other patients), next to the estimates on healthy cell types. */
+function checkTumor(b) {
+  if (!b || !Array.isArray(b.genes) || !Array.isArray(b.values) || b.values.length !== b.genes.length || !Array.isArray(b.types)) throw new Error('Invalid tumor table.');
+  return { ...b, index: new Map(b.genes.map((g, i) => [g, i])) };
+}
+function tumorNote(d, gene, { full = false } = {}) {
+  if (!d.geneTumorUrl && !d.geneTumor) return '';
+  const T = d.geneTumor, st = String(d.lazy.geneTumor || '');
+  if (!T) { if (!st.startsWith('error')) ensureLazy('geneTumor', checkTumor); return full ? `<p class="note">${st.startsWith('error') ? 'The single-cell tumor data could not be loaded.' : 'Loading the single-cell tumor data…'}</p>` : ''; }
+  const i = T.index.get(gene);
+  if (i === undefined) return full ? '<p class="note" data-tumor-note="none"><b>In tumors:</b> not measured in the public single-cell tumor data.</p>' : '';
+  const top = T.top?.[i], fold = T.fold?.[i], lab = k => T.typeLabels?.[k] || T.types[k], low = s => (/^[A-Z][a-z]/.test(s) ? s.charAt(0).toLowerCase() + s.slice(1) : s), det = T.refDetected?.[i];
+  const lead = top === null || top === undefined ? 'it is not detected in any cell type'
+    : Number.isFinite(fold) && fold < 1.5 ? `no single cell type stands out (highest: ${esc(low(lab(top)))}, ${sig(fold)} times the next cell type)`
+      : `it is highest in ${esc(low(lab(top)))}${Number.isFinite(fold) ? ` (${sig(fold)} times the next cell type)` : ''}`;
+  const ref = det === 0 || det === false ? ' It is not detected in the healthy reference cell types, so the estimates on healthy cell types cannot locate it.' : '';
+  let bars = '';
+  if (full) {
+    const vals = T.values[i].map((v, k) => ({ v, k })).filter(x => Number.isFinite(x.v)).sort((a, b) => b.v - a.v).slice(0, 5), vmax = Math.max(...vals.map(x => x.v), 1e-9);
+    bars = `<div class="note" style="margin:16px 0 6px"><b style="color:var(--ink-2)">In tumors</b> · mean expression in public single-cell data from PDAC tumors of other patients, counts per 10,000 (the five highest cell types)</div><div id="lookup-tumor">${vals.map(x => `<div class="hbar"><span>${esc(lab(x.k))}</span><span class="track"><i style="width:${(x.v / vmax * 100).toFixed(1)}%;background:${T.typeGroups?.[x.k] === 'malignant' ? '#b42318' : T.typeGroups?.[x.k] === 'fibroblast' ? '#5f6b76' : '#98a2b3'}"></i></span><b>${sig(x.v)}</b></div>`).join('')}</div>`;
+  }
+  return `<div data-tumor-note="${top === null || top === undefined ? 'undetected' : 'ok'}">${bars}<p class="note"><b>In tumors:</b> in public single-cell data from PDAC tumors of other patients, ${lead}.${ref}${full && T.caveat ? ` ${esc(T.caveat)}` : ' These values are not from the samples of this analysis.'}</p></div>`;
 }
 function sampleLabel(id) {
   const s = state.data.samples.find(x => x.id === id);
@@ -307,15 +438,23 @@ function mix(a, b, t) {
   const [x, y] = [p(a), p(b)];
   return `rgb(${x.map((v, i) => Math.round(v + (y[i] - v) * t)).join(',')})`;
 }
-/* Scatter of the estimated profiles on the metabolic (x, y) or expression (ex, ey) map. */
+/* Scatter of the estimated profiles on the metabolic (x, y) or expression (ex, ey) map. Profiles outside the chosen
+   group or sample stay on the map in gray; healthy reference cells share the expression map. */
 function drawEmbedding(sel = '.embedding.main', { sampleOnly = null } = {}) {
   const svg = $(sel); if (!svg) return;
-  const d = state.data, expr = (svg.dataset.space || state.mapSpace) === 'expression' && d.cells.some(c => Number.isFinite(c.ex));
+  const d = state.data, mg = sampleOnly ? 'all' : mapGroup(d), R = !sampleOnly ? d.healthy?.referenceCells : null;
+  const expr = ((svg.dataset.space || state.mapSpace) === 'expression' || mg === HEALTHY) && d.cells.some(c => Number.isFinite(c.ex));
   const gx = c => (expr ? c.ex : c.x), gy = c => (expr ? c.ey : c.y);
   const W = Number(svg.dataset.w || 640), H = Number(svg.dataset.h || 400), pad = 24;
   const base = d.cells.filter(c => Number.isFinite(gx(c)) && Number.isFinite(gy(c)));
-  const cells = sampleOnly ? base : base.filter(c => inMapGroup(d, c.sample) && (state.sample === 'all' || c.sample === state.sample));
-  const xs = base.map(gx), ys = base.map(gy);
+  const ht = d.healthy?.cellTypes || [];
+  /* reference cells are stored in blocks by cell type and donor; draw them in a fixed mixed order so that no type hides another */
+  const ref = expr && R && mg === HEALTHY ? R.ex.map((x, i) => ({ ex: x, ey: R.ey[i], x, y: R.ey[i], type: ht[R.type[i]], donor: R.donors?.[R.donor?.[i]] ?? R.donor?.[i], ref: true })).map((p, i, a) => (a.length % 7919 ? a[(i * 7919) % a.length] : p)) : [];
+  const inSel = c => inMapGroup(d, c.sample) && (state.sample === 'all' || c.sample === state.sample);
+  const fg = sampleOnly ? base.filter(c => c.sample === sampleOnly) : mg === HEALTHY ? ref : base.filter(inSel);
+  const bg = sampleOnly ? base.filter(c => c.sample !== sampleOnly) : mg === HEALTHY ? base : base.filter(c => !inSel(c));
+  /* the frame covers the profiles and, once loaded, the healthy reference cells, so it does not move when the group changes */
+  const xs = base.map(gx).concat(expr && R ? R.ex : []), ys = base.map(gy).concat(expr && R ? R.ey : []);
   const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
   const X = v => pad + (v - x0) / ((x1 - x0) || 1) * (W - 2 * pad), Y = v => H - pad - (v - y0) / ((y1 - y0) || 1) * (H - 2 * pad);
   const scores = base.map(c => c.score).filter(Number.isFinite);
@@ -323,17 +462,15 @@ function drawEmbedding(sel = '.embedding.main', { sampleOnly = null } = {}) {
   const color = Object.fromEntries(d.cellTypes.map(t => [t.name, t.color]));
   const viridis = ['#440154', '#3b528b', '#21918c', '#5ec962', '#fde725'];
   const ramp = v => { const t = Math.max(0, Math.min(.999, (v - s0) / ((s1 - s0) || 1))) * 4; const i = Math.floor(t); return mix(viridis[i], viridis[i + 1], t - i); };
-  const r = base.length > 1500 ? 2.1 : 2.8;
-  const fg = sampleOnly ? cells.filter(c => c.sample === sampleOnly) : cells;
-  let html = sampleOnly ? `<g>${cells.filter(c => c.sample !== sampleOnly).map(c => `<circle cx="${X(gx(c)).toFixed(1)}" cy="${Y(gy(c)).toFixed(1)}" r="1.6" fill="#d0d5dd" fill-opacity=".55"/>`).join('')}</g>` : '';
-  html += `<g>${fg.map((c, i) => `<circle cx="${X(gx(c)).toFixed(1)}" cy="${Y(gy(c)).toFixed(1)}" r="${sampleOnly ? 2.9 : r}" fill="${state.colorBy === 'type' || sampleOnly ? color[c.type] : ramp(c.score)}" fill-opacity="${!sampleOnly && state.hidden.has(c.type) ? .05 : .8}" data-i="${i}"/>`).join('')}</g>`;
+  const r = base.length > 1500 ? 2.1 : 2.8, byType = state.colorBy === 'type' || sampleOnly || mg === HEALTHY;
+  let html = bg.length ? `<g class="map-bg">${bg.map(c => `<circle cx="${X(gx(c)).toFixed(1)}" cy="${Y(gy(c)).toFixed(1)}" r="1.6" fill="#d0d5dd" fill-opacity=".55"/>`).join('')}</g>` : '';
+  html += `<g class="map-fg">${fg.map((c, i) => `<circle cx="${X(gx(c)).toFixed(1)}" cy="${Y(gy(c)).toFixed(1)}" r="${sampleOnly ? 2.9 : r}" fill="${byType ? (color[c.type] || typeColor(c.type)) : ramp(c.score)}" fill-opacity="${!sampleOnly && state.hidden.has(c.type) ? .05 : .8}" data-i="${i}"/>`).join('')}</g>`;
   html += `<g font-size="11" fill="#667085"><path d="M${pad} ${H - 8}h28M${pad} ${H - 8}v-28" stroke="#98a2b3" stroke-width="1"/><text x="${pad + 34}" y="${H - 4}">UMAP 1</text><text x="8" y="${H - 44}" transform="rotate(-90 8 ${H - 44})">UMAP 2</text></g>`;
-  if (!sampleOnly && state.colorBy === 'type') {
-    /* label each cell type at its median position; nudge or skip labels that would overlap (types that share a neighborhood) */
-    const placed = [], cand = d.cellTypes.map(t => ({ t, pts: cells.filter(c => c.type === t.name) })).filter(x => x.pts.length >= 8 && !state.hidden.has(x.t.name)).sort((a, b) => b.pts.length - a.pts.length);
+  if (!sampleOnly && byType) {
+    /* label each cell type at its densest region; nudge or skip labels that would overlap (types that share a neighborhood) */
+    const placed = [], cand = d.cellTypes.map(t => ({ t, pts: fg.filter(c => c.type === t.name) })).filter(x => x.pts.length >= 8 && !state.hidden.has(x.t.name)).sort((a, b) => b.pts.length - a.pts.length);
     const hit = (b) => placed.some(p => b.x0 < p.x1 && b.x1 > p.x0 && b.y0 < p.y1 && b.y1 > p.y0);
     for (const { t, pts } of cand) {
-      /* label position: the profile of this type with the most same-type neighbors within 18 px (the type's densest region) */
       const xy = pts.map(c => [X(gx(c)), Y(gy(c))]), step = Math.max(1, Math.floor(xy.length / 250));
       let best = xy[0], bestN = -1;
       for (let a = 0; a < xy.length; a += step) { let n = 0; for (const b of xy) if ((b[0] - xy[a][0]) ** 2 + (b[1] - xy[a][1]) ** 2 < 324) n++; if (n > bestN) { bestN = n; best = xy[a]; } }
@@ -352,7 +489,7 @@ function drawEmbedding(sel = '.embedding.main', { sampleOnly = null } = {}) {
   svg.onpointermove = e => {
     const i = e.target.dataset?.i; if (i === undefined) { tip.classList.add('hidden'); return; }
     const c = fg[Number(i)], box = wrap.getBoundingClientRect();
-    tip.textContent = `${typeLabel(c.type)} profile · from ${sampleLabel(c.sample)} · mean metabolic activity ${sig(c.score)}`;
+    tip.textContent = c.ref ? `${typeLabel(c.type)} cell of the healthy reference${c.donor !== undefined && c.donor !== null ? ` · donor ${c.donor}` : ''}` : `${typeLabel(c.type)} profile · from ${sampleLabel(c.sample)} · mean metabolic activity ${sig(c.score)}`;
     tip.style.left = `${Math.max(0, Math.min(e.clientX - box.left + 12, box.width - 300))}px`; tip.style.top = `${Math.max(4, e.clientY - box.top - 34)}px`;
     tip.classList.remove('hidden');
   };
@@ -362,10 +499,104 @@ function drawEmbedding(sel = '.embedding.main', { sampleOnly = null } = {}) {
 /* ---------- Samples ---------- */
 const numericMeta = new Set(['Age']);
 function metaValue(s, k) { const v = s.meta?.[k]; if (numericMeta.has(k) && v !== null && v !== '' && Number.isFinite(Number(v))) return Number(v); return v ?? null; }
+/* Map of the estimated profiles (expression or metabolic), with the group filter and the healthy reference cells. */
+function mapCard(d) {
+  const samples = [...new Set(d.cells.map(x => x.sample))];
+  const mapGroups = groupNames(d).filter(g => samples.some(s => d.comparison?.samples?.[s] === g)), mg = mapGroup(d);
+  const hasExpr = d.cells.some(x => Number.isFinite(x.ex)), R = d.healthy?.referenceCells, canHealthy = hasExpr && !!(R || d.healthyUrl);
+  const space = hasExpr && (state.mapSpace === 'expression' || mg === HEALTHY) ? 'expression' : 'metabolic';
+  const shownSamples = samples.filter(s => inMapGroup(d, s)), shownCells = mg === 'all' ? d.cells.length : d.cells.filter(x => inMapGroup(d, x.sample)).length;
+  if (state.sample !== 'all' && !shownSamples.includes(state.sample)) state.sample = 'all';
+  const count = mg === HEALTHY
+    ? `Showing in color ${num(R.ex.length)}${R.n > R.ex.length ? ` of the ${num(R.n)}` : ''} healthy reference cells${R.n > R.ex.length ? ' (a random subset)' : ''}; the ${num(d.cells.length)} displayed estimated profiles are in gray. ${esc(DEMO().healthyText?.mapNote || 'The estimated profiles are generated from these reference cells, so the two overlap by construction.')}`
+    : mg === 'all' ? (d.cells.length < d.counts.cells ? `Showing ${num(d.cells.length)} of ${num(d.counts.cells)} estimated profiles (a random subset)` : `Showing all ${num(d.cells.length)} estimated profiles`)
+      : `Showing in color ${num(shownCells)} of the ${num(d.cells.length)} displayed profiles: those estimated from the ${num(shownSamples.length)} ${esc(mg)} samples; the other profiles are in gray. The filter changes the map only; cell-type values on this site summarize all samples.`;
+  return `<section class="card" id="map-card"><div class="card-head"><div><div class="card-title">${space === 'expression' ? 'Expression map' : 'Metabolic map'}</div><div class="card-sub">Each point is one ${mg === HEALTHY ? 'healthy reference cell (color) or estimated single-cell profile (gray)' : 'estimated single-cell profile'}, placed by ${space === 'expression' ? 'similarity of gene expression' : 'similarity of estimated metabolic activity'} (UMAP; axes have no units)</div></div>
+      <div class="controls">${hasExpr ? `<div class="segmented" role="group" aria-label="Map"><button class="${space === 'expression' ? 'active' : ''}" data-space="expression">Expression</button><button class="${space === 'metabolic' ? 'active' : ''}" data-space="metabolic">Metabolic</button></div>` : ''}
+      <div class="segmented" role="group" aria-label="Color"><button class="${state.colorBy === 'type' || mg === HEALTHY ? 'active' : ''}" data-color="type">Cell type</button><button class="${state.colorBy === 'score' && mg !== HEALTHY ? 'active' : ''}" data-color="score"${mg === HEALTHY ? ' disabled' : ''}>Metabolic activity</button></div>
+      ${mapGroups.length || canHealthy ? `<div class="segmented" role="group" aria-label="Group shown in color on the map"><button class="${mg === 'all' ? 'active' : ''}" data-mapgroup="all">All samples</button>${mapGroups.map(g => `<button class="${mg === g ? 'active' : ''}" data-mapgroup="${esc(g)}">${esc(g)}</button>`).join('')}${canHealthy ? `<button class="${mg === HEALTHY ? 'active' : ''}" data-mapgroup="${HEALTHY}"${R ? '' : ' disabled title="Loading the healthy reference cells"'}>${HEALTHY}</button>` : ''}</div>` : ''}
+      <select class="select" id="sample-select" aria-label="Show the profiles of one sample in color"${mg === HEALTHY ? ' disabled' : ''}><option value="all">${mg === 'all' || mg === HEALTHY ? 'All samples' : `All ${esc(mg)} samples`}</option>${shownSamples.map(s => `<option value="${esc(s)}" ${state.sample === s ? 'selected' : ''}>${esc(sampleLabel(s))}</option>`).join('')}</select></div></div>
+      <div class="card-body"><div class="embed-wrap"><svg class="embedding main" viewBox="0 0 640 400" data-w="640" data-h="400" role="img" aria-label="Map of estimated single-cell profiles"></svg><div class="tip hidden"></div></div>
+      <div class="legend">${d.cellTypes.map(t => `<button class="${state.hidden.has(t.name) ? 'off' : ''}" data-type="${esc(t.name)}"><span class="swatch" style="background:${t.color}"></span>${esc(t.label)}</button>`).join('')}</div></div>
+      <div class="card-foot"><span id="map-count">${count}${hasExpr && mg === 'all' ? ' · both maps show the same profiles' : ''}</span>${d.figures.length ? '<button class="link-btn" data-view="figures">How to read this map →</button>' : '<span>Select a cell type to hide it</span>'}</div></section>`;
+}
+/* Mean composition of each group, with the test between the groups when a comparison exists. */
+function compositionMeansCard(d) {
+  const groups = groupNames(d), c = d.comparison;
+  const compRows = groups.length && d.samples.some(s => s.meta?.Group)
+    ? groups.map(g => ({ g, comp: meanComposition(d, s => s.meta?.Group === g), n: d.samples.filter(s => s.meta?.Group === g).length }))
+    : [{ g: null, comp: meanComposition(d), n: d.samples.length }];
+  const order = compRows[0].comp.map(t => t.name), test = c?.composition?.table ? new Map(c.composition.table.map(r => [r.cell_type, r])) : null;
+  return `<section class="card" id="comp-means"><div class="card-head"><div><div class="card-title">Cell-type composition</div><div class="card-sub">Mean estimated fraction of cells${groups.length ? ' in each group of samples' : ` across ${plural(d.samples.length, 'sample')}`} (%)</div></div></div>
+    <div class="card-body">${compRows.map(r => `<div class="comp-group">${r.g ? `<div class="comp-label"><span class="swatch" style="background:${groupColor(d, r.g)}"></span><b>${esc(r.g)}</b> <small>${plural(r.n, 'sample')}</small></div>` : ''}<div class="stack">${order.map(name => { const t = r.comp.find(x => x.name === name); return `<span style="width:${(t.share * 100).toFixed(2)}%;background:${t.color}" title="${esc(t.label)} ${pct(t.share)}"></span>`; }).join('')}</div></div>`).join('')}
+    <table class="table comp-table"><thead><tr><th>Cell type</th>${compRows.map(r => `<th class="num">${esc(r.g || 'Mean')}</th>`).join('')}${test ? '<th class="num" title="Median of the test group minus median of the reference group, percentage points">Median difference</th><th class="num" title="Two-sided rank-sum test per cell type, adjusted across cell types">Adjusted p</th>' : ''}</tr></thead><tbody>${order.map(name => { const t = compRows[0].comp.find(x => x.name === name), q = test?.get(name); return `<tr><td><span class="swatch" style="background:${t.color};margin-right:6px"></span>${esc(t.label)}</td>${compRows.map(r => `<td class="num">${pct(r.comp.find(x => x.name === name).share)}</td>`).join('')}${test ? `<td class="num">${q ? `${q.median_difference_pp > 0 ? '+' : ''}${sig(q.median_difference_pp)}` : '—'}</td><td class="num">${q ? fmtP(q.padj) : '—'}</td>` : ''}</tr>`; }).join('')}</tbody></table>
+    ${test ? `<p class="note">Group columns: mean fraction. Median difference: ${esc(c.test)} minus ${esc(c.reference)}, in percentage points; test: ${esc(c.composition.test || 'two-sided rank-sum test per cell type, adjusted across cell types')}.</p>` : ''}</div>
+    <div class="card-foot"><span>Fractions sum to 100% in each sample</span><span></span></div></section>`;
+}
+function checkHealthy(b) {
+  if (!b || typeof b !== 'object' || (!b.referenceCells && !b.typeSimilarity && !b.bulk)) throw new Error('Invalid healthy-group file.');
+  const R = b.referenceCells;
+  if (R && (!Array.isArray(R.ex) || !Array.isArray(R.ey) || R.ex.length !== R.ey.length || !Array.isArray(R.type) || R.type.length !== R.ex.length || !Array.isArray(b.cellTypes))) throw new Error('Invalid healthy reference cells.');
+  return b;
+}
+/* Descriptive similarity of each group's estimated profiles to healthy reference cells of the same type (no test). */
+function healthyTypeCard(d) {
+  const Hh = d.healthy, ts = Hh?.typeSimilarity, V = ts?.values; if (!V?.meanExprCorr || !V.nnDistRatioOtherCells) return '';
+  const types = Hh.cellTypes, groups = ts.groups || [], tx = DEMO().healthyText || {}, f2 = v => (Number.isFinite(v) ? v.toFixed(2) : '—');
+  const def = k => (ts.metrics || []).find(m => m.key === k)?.definition || '';
+  const only = d.cellTypes.filter(t => !state.hidden.has(t.name)), focus = only.length === 1 ? only[0].name : null;
+  const rows = types.map((t, ti) => `<tr class="clickable${focus === t ? ' selected' : ''}" data-focustype="${esc(t)}" tabindex="0"><td><span class="swatch" style="background:${typeColor(t, ti)};margin-right:6px"></span>${esc(typeLabel(t))}</td>${groups.map((g, gi) => `<td class="num">${f2(V.meanExprCorr[gi]?.[ti])}<small>healthy cells: ${f2(V.meanExprCorrHealthy?.[gi]?.[ti])}</small></td>`).join('')}${groups.map((g, gi) => `<td class="num">${f2(V.nnDistRatioOtherCells[gi]?.[ti])}</td>`).join('')}${V.nearestIsSource ? groups.map((g, gi) => `<td class="num">${pct(V.nearestIsSource[gi]?.[ti], 0)}</td>`).join('') : ''}${groups.map((g, gi) => `<td class="num">${num(ts.nProfiles?.[gi]?.[ti])}</td>`).join('')}</tr>`).join('');
+  const gh = () => groups.map(g => `<th class="num">${esc(g)}</th>`).join('');
+  return `<section class="card section" id="healthy-types"><div class="card-head"><div><div class="card-title">Cell types next to the healthy reference cells</div><div class="card-sub">How close the estimated profiles of each group are to healthy reference cells of the same type. Descriptions, not tests. Select a row to show only that cell type on the map.</div></div><span class="badge">Descriptive</span></div>
+    <div class="card-body"><div class="table-wrap"><table class="table compact" id="healthy-type-table"><thead><tr><th rowspan="2">Cell type</th><th class="num" colspan="${groups.length}" title="${esc(def('meanExprCorr'))}">Correlation with healthy cells</th><th class="num" colspan="${groups.length}" title="${esc(def('nnDistRatioOtherCells'))}">Distance to the nearest healthy cell (× healthy spacing)</th>${V.nearestIsSource ? `<th class="num" colspan="${groups.length}" title="${esc(def('nearestIsSource'))}">Nearest healthy cell is the profile's own source</th>` : ''}<th class="num" colspan="${groups.length}">Estimated profiles</th></tr><tr>${gh()}${gh()}${V.nearestIsSource ? gh() : ''}${gh()}</tr></thead><tbody>${rows}</tbody></table></div>
+    ${tx.tableCaption ? `<p class="note">${esc(tx.tableCaption)}</p>` : ''}${tx.tableReading ? `<p class="note"><b>Reading.</b> ${esc(tx.tableReading)}</p>` : ''}
+    <p class="note" id="healthy-caveat"><b>Read with care.</b> ${esc(tx.tableCaveat || ts.note || 'Descriptive values only; no test was run.')}</p></div></section>`;
+}
+const HEALTHY_COLOR = '#12805c';
+function healthyGroupColor(d, g) { const i = groupNames(d).indexOf(g); return i >= 0 ? GROUP_COLOR[i] : HEALTHY_COLOR; }
+/* Bulk samples next to healthy pancreas samples of another project: on marker genes (default) or on all shared genes. */
+function healthyBulkCard(d) {
+  const b = d.healthy?.bulk; if (!b || !Array.isArray(b.samples) || !Array.isArray(b.x) || !Array.isArray(b.y)) return '';
+  const tx = DEMO().healthyText || {}, mk = b.markerOnly && state.healthyView !== 'all' ? b.markerOnly : null;
+  const xs = mk ? mk.x : b.x, ys = mk ? mk.y : b.y, axes = mk ? mk.axes : b.axes, usePos = !!(mk && Array.isArray(mk.position));
+  const val = usePos ? mk.position : mk ? mk.corrHealthy : b.corrHealthy, valLabel = usePos ? 'Position on marker genes (0 = healthy average, 1 = tumor average)' : 'Correlation with the healthy pancreas average';
+  const cmp = groupNames(d), groups = [...new Set(b.samples.map(s => s.group))].sort((p, q) => (cmp.includes(p) ? 2 - cmp.indexOf(p) : 0) - (cmp.includes(q) ? 2 - cmp.indexOf(q) : 0));
+  const note = i => b.sampleNote?.[i] || null, title = (i, extra = '') => `${esc(b.samples[i].label || b.samples[i].id)} · ${esc(b.samples[i].group)}${extra}${note(i) ? ` · ${esc(note(i))}` : ''}`;
+  const dot = (i, cx, cy, r) => { const k = healthyGroupColor(d, b.samples[i].group), m = !!note(i); return `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${r}" fill="${m ? '#fff' : k}" fill-opacity="${m ? 1 : .8}" stroke="${m ? k : '#fff'}" stroke-width="${m ? 1.6 : .8}"${m ? ' data-marked="1"' : ''}><title>${title(i, Number.isFinite(val?.[i]) ? `: ${val[i].toFixed(2)}` : '')}</title></circle>`; };
+  const L = 52, W = 430, T = 12, H = 300, x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys), px = (x1 - x0) * .05 || 1, py = (y1 - y0) * .05 || 1;
+  const X = v => L + (v - x0 + px) / (x1 - x0 + 2 * px) * W, Y = v => T + H - (v - y0 + py) / (y1 - y0 + 2 * py) * H;
+  const idx = b.samples.map((s, i) => i).sort((p, q) => (cmp.includes(b.samples[p].group) ? 1 : 0) - (cmp.includes(b.samples[q].group) ? 1 : 0));
+  const tk = (a, z, f) => ticksFor(a, z, 5).map(f).join('');
+  const scatter = `<svg class="svgplot" id="healthy-scatter" viewBox="0 0 ${L + W + 10} ${T + H + 44}" role="img" aria-label="Healthy, adjacent and tumor samples by expression similarity"><g font-size="11.5" fill="#667085">${tk(x0, x1, v => `<line x1="${X(v).toFixed(1)}" x2="${X(v).toFixed(1)}" y1="${T + H}" y2="${T + H + 5}" stroke="#98a2b3"/><text x="${X(v).toFixed(1)}" y="${T + H + 18}" text-anchor="middle">${sig(v)}</text>`)}${tk(y0, y1, v => `<line x1="${L - 5}" x2="${L}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}" stroke="#98a2b3"/><text x="${L - 8}" y="${(Y(v) + 4).toFixed(1)}" text-anchor="end">${sig(v)}</text>`)}<line x1="${L}" x2="${L}" y1="${T}" y2="${T + H}" stroke="#98a2b3"/><line x1="${L}" x2="${L + W}" y1="${T + H}" y2="${T + H}" stroke="#98a2b3"/>
+    <text class="axis-title" x="${L + W / 2}" y="${T + H + 38}" text-anchor="middle" fill="#344054">${esc(axes?.[0] || 'Component 1')}</text><text class="axis-title" transform="translate(13 ${T + H / 2}) rotate(-90)" text-anchor="middle" fill="#344054">${esc(axes?.[1] || 'Component 2')}</text></g>${idx.map(i => dot(i, X(xs[i]), Y(ys[i]), 4)).join('')}</svg>`;
+  let strip = '';
+  if (Array.isArray(val)) {
+    const pts = b.samples.map((s, i) => i).filter(i => Number.isFinite(val[i]));
+    const lo = Math.min(...pts.map(i => val[i]), usePos ? 0 : Infinity), hi = Math.max(...pts.map(i => val[i]), usePos ? 1 : -Infinity), pad = (hi - lo) * .08 || .01, a = lo - pad, z = hi + pad, L2 = 56, W2 = 300, cw = W2 / groups.length, Y2 = v => T + H - (v - a) / (z - a) * H;
+    const sd = pts.map((i, n) => { const k = groups.indexOf(b.samples[i].group), x = L2 + cw * (k + .5) + ((((n + 1) * 7919) % 97) / 97 - .5) * cw * .5; return dot(i, x, Y2(val[i]), 3.6); }).join('');
+    const med = groups.map((g, k) => { const v = pts.filter(i => b.samples[i].group === g).map(i => val[i]).sort((p, q) => p - q); if (!v.length) return ''; const m = v.length % 2 ? v[v.length >> 1] : (v[v.length / 2 - 1] + v[v.length / 2]) / 2, x = L2 + cw * (k + .5); return `<line x1="${(x - cw * .3).toFixed(1)}" x2="${(x + cw * .3).toFixed(1)}" y1="${Y2(m).toFixed(1)}" y2="${Y2(m).toFixed(1)}" stroke="#0b1f33" stroke-width="2"><title>Median of the samples shown, ${esc(g)}: ${m.toFixed(2)}</title></line>`; }).join('');
+    const refs = usePos ? [0, 1].map(v => `<line x1="${L2}" x2="${L2 + W2}" y1="${Y2(v).toFixed(1)}" y2="${Y2(v).toFixed(1)}" stroke="#d0d5dd" stroke-dasharray="3 3"/>`).join('') : '';
+    const xl = groups.map((g, k) => `<text x="${(L2 + cw * (k + .5)).toFixed(1)}" y="${T + H + 17}" text-anchor="middle" fill="#344054">${esc(g.replace(/ \(GTEx\)$/, ''))}</text><text x="${(L2 + cw * (k + .5)).toFixed(1)}" y="${T + H + 31}" text-anchor="middle">n = ${pts.filter(i => b.samples[i].group === g).length}</text>`).join('');
+    strip = `<svg class="svgplot" id="healthy-strip" viewBox="0 0 ${L2 + W2 + 8} ${T + H + 44}" role="img" aria-label="${esc(valLabel)} by group"><g font-size="11.5" fill="#667085">${tk(a, z, v => `<line x1="${L2 - 5}" x2="${L2}" y1="${Y2(v).toFixed(1)}" y2="${Y2(v).toFixed(1)}" stroke="#98a2b3"/><text x="${L2 - 8}" y="${(Y2(v) + 4).toFixed(1)}" text-anchor="end">${v.toFixed(2)}</text>`)}${refs}<line x1="${L2}" x2="${L2}" y1="${T}" y2="${T + H}" stroke="#98a2b3"/><line x1="${L2}" x2="${L2 + W2}" y1="${T + H}" y2="${T + H}" stroke="#98a2b3"/>${xl}<text class="axis-title" transform="translate(13 ${T + H / 2}) rotate(-90)" text-anchor="middle" fill="#344054">${esc(valLabel)}</text></g>${sd}${med}</svg>`;
+  }
+  const g = b.gtex || {}, nMarked = (b.sampleNote || []).filter(Boolean).length;
+  const toggle = b.markerOnly ? `<div class="segmented" role="group" aria-label="Genes used"><button class="${mk ? 'active' : ''}" data-healthyview="markers">Marker genes</button><button class="${mk ? '' : 'active'}" data-healthyview="all">All genes</button></div>` : '';
+  return `<section class="card section" id="healthy-bulk"><div class="card-head"><div><div class="card-title">Bulk samples next to healthy pancreas</div><div class="card-sub">${mk ? `Healthy pancreas samples of another project (GTEx), adjacent pancreas and PDAC on ${num(mk.nGenes)} marker genes of acinar, ductal, islet and stromal cells` : `Healthy pancreas samples of another project (GTEx), adjacent pancreas and PDAC on all ${num(b.nGenes)} shared genes; the main axis separates the two data sources`}</div></div><div class="controls">${toggle}<span class="badge">Descriptive</span></div></div>
+    <div class="card-body">${mk ? '' : `<div class="alert warn" id="healthy-source-warning">${esc(tx.bulkCaveat || 'The horizontal axis mainly separates the two data sources, not healthy from diseased tissue.')}</div>`}
+    <div class="grid halves"><div>${scatter}</div><div>${strip}</div></div>
+    <div class="legend static">${groups.map(x => `<span><span class="swatch" style="background:${healthyGroupColor(d, x)}"></span>${esc(x)} (${num(b.samples.filter(s => s.group === x).length)}${x.includes('GTEx') && g.n ? ` of ${num(g.n)} shown` : ''})</span>`).join('')}${nMarked ? `<span><svg width="12" height="12" aria-hidden="true"><circle cx="6" cy="6" r="4" fill="#fff" stroke="#667085" stroke-width="1.6"/></svg>Sample with a known issue (${num(nMarked)})</span>` : ''}</div>
+    <p class="note">${esc(mk ? (tx.markerCaption || '') : (tx.bulkCaption || ''))}${usePos && mk.positionDefinition ? ` ${esc(mk.positionDefinition)}` : ''}</p>
+    ${mk && tx.markerReading ? `<p class="note" id="healthy-reading"><b>Reading.</b> ${esc(tx.markerReading)}</p>` : ''}${!mk && tx.corrNote ? `<p class="note">${esc(tx.corrNote)}</p>` : ''}
+    ${tx.markedNote ? `<p class="note">Marked samples: ${esc(tx.markedNote)}</p>` : ''}
+    ${b.batchNote ? `<details class="advanced" id="healthy-batch"><summary>How much of the difference between the two data sources is technical</summary><p class="note">${esc(b.batchNote)}</p></details>` : ''}
+    ${g.release ? `<p class="note">Healthy pancreas: ${esc(g.release)}, pancreas, ${num(g.n)} samples${g.nShown && g.nShown < g.n ? ` (${num(g.nShown)} shown, chosen at random; averages and components use all)` : ''}${g.url ? ` · <a href="${esc(g.url)}" target="_blank" rel="noopener">GTEx Portal</a>` : ''}. Credit in About.</p>` : ''}</div></section>`;
+}
 function viewSamples() {
-  const d = state.data;
-  if (!d.samples.length || !d.samples.some(s => Object.keys(s.fractions).length))
-    return `${pageHead('Samples', 'Per-sample composition', '')}<div class="card"><div class="empty">This result does not include per-sample fractions.</div></div>`;
+  const d = state.data, c = d.comparison;
+  if (!d.healthy && d.healthyUrl && !String(d.lazy.healthy || '').startsWith('error')) ensureLazy('healthy', checkHealthy);
+  const hasFractions = d.samples.length && d.samples.some(s => Object.keys(s.fractions).length);
+  if (!hasFractions)
+    return `${pageHead('Samples', 'Samples and map', '')}${d.metabolic ? mapCard(d) : ''}<div class="card section"><div class="empty">This result does not include per-sample fractions.</div></div>`;
   const order = meanComposition(d).map(t => t.name), types = d.cellTypes.map(t => t.name);
   const metaKeys = [...new Set(d.samples.flatMap(s => Object.keys(s.meta)))].filter(k => k !== 'Tissue');
   const cols = { label: { v: s => s.label }, profiles: { v: s => s.profiles }, ...Object.fromEntries(metaKeys.map(k => [`m:${k}`, { v: s => metaValue(s, k) }])), ...Object.fromEntries(order.map(t => [`f:${t}`, { v: s => s.fractions[t] }])) };
@@ -380,20 +611,29 @@ function viewSamples() {
     const on = x.id === sel.id;
     return `<g class="bar-sample${on ? ' on' : ''}" data-sample-pick="${esc(x.id)}" opacity="${on ? 1 : .82}">${segs}${on ? `<rect x="${(L + i * bw + .5).toFixed(2)}" y="${T}" width="${Math.max(.5, bw - 1).toFixed(2)}" height="${H}" fill="none" stroke="#0b1f33" stroke-width="2"/>` : ''}</g>`;
   }).join('');
-  const groupStrip = d.comparison ? rows.map((x, i) => `<rect x="${(L + i * bw + .5).toFixed(2)}" y="${T + H + 4}" width="${Math.max(.5, bw - 1).toFixed(2)}" height="6" fill="${groupColor(d, x.meta.Group)}"><title>${esc(x.label)}: ${esc(x.meta.Group)}</title></rect>`).join('') : '';
+  const groupStripRects = c ? rows.map((x, i) => `<rect x="${(L + i * bw + .5).toFixed(2)}" y="${T + H + 4}" width="${Math.max(.5, bw - 1).toFixed(2)}" height="6" fill="${groupColor(d, x.meta.Group)}"><title>${esc(x.label)}: ${esc(x.meta.Group)}</title></rect>`).join('') : '';
   const axis = [0, 25, 50, 75, 100].map(v => { const y = T + H - v / 100 * H; return `<line x1="${L - 5}" x2="${L}" y1="${y}" y2="${y}" stroke="#98a2b3"/><text x="${L - 9}" y="${y + 4}" text-anchor="end">${v}</text>`; }).join('');
   const sortedBy = s.key === 'label' ? 'sample name' : s.key.startsWith('f:') ? `${typeLabel(s.key.slice(2)).toLowerCase()} fraction` : s.key.startsWith('m:') ? s.key.slice(2).toLowerCase() : 'estimated profiles';
   const th = (k, l, o = {}) => sortTh('samples', k, l, { defKey, defDir: 1, ...o });
   const table = `<table class="table"><thead><tr>${th('label', 'Sample')}${metaKeys.map(k => th(`m:${k}`, esc(k), { num: numericMeta.has(k) })).join('')}${order.map(t => th(`f:${t}`, `${esc(typeLabel(t))} (%)`, { num: true })).join('')}${th('profiles', 'Estimated profiles', { num: true, title: 'Single-cell profiles estimated from this sample' })}</tr></thead>
   <tbody>${rows.map(x => `<tr class="clickable${x.id === sel.id ? ' selected' : ''}" data-sample-pick="${esc(x.id)}"><td><button type="button" class="name-link" data-sample-pick="${esc(x.id)}">${esc(x.label)}</button>${x.label !== x.id ? `<small>${esc(x.id)}</small>` : ''}</td>${metaKeys.map(k => `<td${numericMeta.has(k) ? ' class="num"' : ''}>${k === 'Healthy reference' && x.meta[k] === 'Outside' ? '<span class="badge warn">Outside</span>' : esc(x.meta[k] ?? '—')}</td>`).join('')}${order.map(t => `<td class="num">${Number.isFinite(x.fractions[t]) ? (x.fractions[t] * 100).toFixed(1) : '—'}</td>`).join('')}<td class="num">${num(x.profiles)}</td></tr>`).join('')}</tbody></table>`;
-  return `${pageHead('Samples', 'Per-sample cell-type composition', `Estimated share of cells of each type in each of the ${plural(rows.length, 'bulk sample')}. Select a column header to sort; the chart follows the table order. Select a sample to see its details on the right.`,
-    `<div class="controls"><button class="btn btn-secondary" data-action="exportcomposition">${icon('download')} CSV</button></div>`)}
-  ${oodBanner(d)}<section class="card"><div class="card-body"><svg viewBox="0 0 ${L + W + 4} ${T + H + 52}" style="width:100%;height:auto" role="img" aria-label="Stacked composition per sample">
+  const byGroup = !!c?.composition, cv = byGroup && state.compView === 'groups' ? 'groups' : 'samples';
+  const stacked = `<svg viewBox="0 0 ${L + W + 4} ${T + H + 52}" style="width:100%;height:auto" role="img" aria-label="Stacked composition per sample">
     <g font-size="12" fill="#667085">${axis}<line x1="${L}" x2="${L}" y1="${T}" y2="${T + H}" stroke="#98a2b3"/>
     <text transform="translate(14 ${T + H / 2}) rotate(-90)" text-anchor="middle" fill="#344054">Estimated fraction of cells (%)</text>
-    <text x="${L + W / 2}" y="${T + H + 40}" text-anchor="middle" fill="#344054">Samples (n = ${num(rows.length)}) in table order, sorted by ${esc(sortedBy)}${d.comparison ? '; strip under the bars: group' : ''}</text></g>${bars}${groupStrip}</svg>
-  <div class="legend static">${order.map(t => `<span><span class="swatch" style="background:${typeColor(t, types.indexOf(t))}"></span>${esc(typeLabel(t))}</span>`).join('')}${d.comparison ? groupNames(d).map(g => `<span><span class="swatch" style="background:${groupColor(d, g)};border-radius:1px"></span>${esc(g)} (strip)</span>`).join('') : ''}</div></div></section>
-  <div class="split section"><section class="card"><div class="card-head"><div><div class="card-title">Composition table</div><div class="card-sub">Estimated fraction of cells per type (%); patient characteristics as reported by the source study</div></div></div>
+    <text x="${L + W / 2}" y="${T + H + 40}" text-anchor="middle" fill="#344054">Samples (n = ${num(rows.length)}) in table order, sorted by ${esc(sortedBy)}${c ? '; strip under the bars: group' : ''}</text></g>${bars}${groupStripRects}</svg>
+  <div class="legend static">${order.map(t => `<span><span class="swatch" style="background:${typeColor(t, types.indexOf(t))}"></span>${esc(typeLabel(t))}</span>`).join('')}${c ? groupNames(d).map(g => `<span><span class="swatch" style="background:${groupColor(d, g)};border-radius:1px"></span>${esc(g)} (strip)</span>`).join('') : ''}</div>`;
+  const compSamples = `<section class="card section" id="comp-samples"><div class="card-head"><div><div class="card-title">${cv === 'groups' ? 'Composition by group' : 'Composition of every sample'}</div><div class="card-sub">${cv === 'groups' ? 'Estimated fraction of cells of each type in every sample (%), by group, with the test between the groups' : 'Estimated fraction of cells of each type in every sample (%). The chart follows the order of the table below; select a bar to see the sample.'}</div></div>
+    ${byGroup ? `<div class="segmented" role="group" aria-label="Composition view"><button class="${cv === 'samples' ? 'active' : ''}" data-compview="samples">Per sample</button><button class="${cv === 'groups' ? 'active' : ''}" data-compview="groups">By group and cell type</button></div>` : ''}</div>
+    <div class="card-body">${cv === 'groups' ? compositionCompare(c, { body: true }) : stacked}</div></section>`;
+  return `${pageHead('Samples', 'Samples, map and cell-type composition', `The estimated single-cell profiles on the map, and the estimated share of cells of each type in each of the ${plural(rows.length, 'bulk sample')}${c ? ' and in each group' : ''}. Select a column header to sort a table and a sample to see its details on the right.`,
+    `<div class="controls">${c && byGroup ? `<span class="note" style="margin:0">Groups compared on the bulk samples: ${esc(c.test)} vs ${esc(c.reference)}</span>` : ''}<button class="btn btn-secondary" data-action="exportcomposition">${icon('download')} CSV</button></div>`)}
+  ${oodBanner(d)}
+  ${d.metabolic ? `<div class="grid two">${mapCard(d)}${compositionMeansCard(d)}</div>` : compositionMeansCard(d)}
+  ${healthyTypeCard(d)}
+  ${compSamples}
+  ${healthyBulkCard(d)}
+  <div class="split section" id="sample-split"><section class="card"><div class="card-head"><div><div class="card-title">Composition table</div><div class="card-sub">Estimated fraction of cells per type (%); patient characteristics as reported by the source study</div></div></div>
     <div class="card-body table-wrap tall" data-scroll-id="samples-table">${table}</div></section>
     <aside class="detail">${sampleDetail(d, sel, order)}</aside></div>
   <div class="section">${glossary(d, { compact: true })}</div>`;
@@ -515,6 +755,7 @@ function pathwayDetail(d, p) {
     <div class="card-body">${info?.description ? `<p class="lead">${esc(info.description)}</p>` : ''}${p.note ? `<p class="note" style="margin:0 0 12px">${esc(p.note)}</p>` : ''}
     <div class="metrics"><div class="metric"><small>Mean activity</small><b>${sig(p.score)}</b></div><div class="metric"><small>Reactions</small><b>${num(p.reactionCount)}</b></div><div class="metric"><small>Enzyme genes</small><b>${num(p.genes.length)}</b></div><div class="metric"><small>Highest activity</small><b>${esc(typeLabel(p.top || '—'))}</b></div></div>
     <div class="note" style="margin:16px 0 6px">Activity by cell type (relative units; z-score across cell types in brackets)</div>${vals.map(x => `<div class="hbar"><span>${esc(x.t.label)}</span><span class="track"><i style="width:${(x.v / vmax * 100).toFixed(1)}%;background:${x.t.color}"></i></span><b>${sig(x.v)} <small>(${x.z >= 0 ? '+' : ''}${sig(x.z)})</small></b></div>`).join('')}
+    ${spatialPanel(d, 'metabolic', p.id, p.name)}
     <div class="note" style="margin:16px 0 6px">Enzyme genes in the data (${num(p.genes.length)})</div><div class="chips">${p.genes.slice(0, 48).map(g => `<span class="chip">${esc(g)}</span>`).join('') || '<span class="note">No mapped genes.</span>'}</div>${p.genes.length > 48 ? `<p class="note">${num(p.genes.length - 48)} more in the CSV export.</p>` : ''}
     <p class="note">Highest activity compares the pathway's mean activity between cell types. The literature section below uses the <b>most specific</b> cell type, which first divides each profile's activities by that profile's overall activity; the two can differ.</p></div></section>`;
 }
@@ -746,6 +987,7 @@ function litTypeTable(types, obs, exp, enr, top) {
 }
 function litCaution(gene) { const c = DEMO().litCautions?.[gene]; return c ? `<p class="note" data-lit-caution><b>Check this gene name.</b> ${esc(c)}</p>` : ''; }
 const LIT_READING = 'Papers are human pancreatic cancer papers in PubMed in which the gene is recognized automatically (PubTator3). Expected = the papers on the gene × the share of pancreatic cancer papers that concern the cell type; observed ÷ expected = (papers + 0.5) ÷ (expected + 0.5). The highlighted cell type has the highest ratio among cell types with at least 3 papers. Counts show how much a gene has been studied in a context, not that it is expressed or active there, and automatic gene recognition makes mistakes.';
+const LIT_HOWTO_HTML = '<p class="note lit-howto"><b>How to read this.</b> A ratio above 1 means the gene is discussed together with that cell type more often than expected from how often each is studied on its own. It measures attention in the literature; it is not evidence that the gene is expressed or active in that cell type.</p>';
 function geneLiterature(d, gene, { compact = false, id = 'gene-lit' } = {}) {
   if (!d.geneLitUrl && !d.geneLit) return '';
   const head = `<div class="note" style="margin:18px 0 6px"><b style="color:var(--ink-2)">Literature support</b> · human pancreatic cancer papers on this gene</div>`;
@@ -757,7 +999,7 @@ function geneLiterature(d, gene, { compact = false, id = 'gene-lit' } = {}) {
   const metrics = `<div class="metrics small"><div class="metric"><small>Pancreatic cancer papers</small><b>${num(r.scope)}</b></div><div class="metric"><small>All human pancreas papers</small><b>${num(r.pancreas)}</b></div><div class="metric"><small>Most associated cell type</small><b>${r.top ? `${esc(typeLabel(r.top))} <span class="of">× ${sig(r.enr[ti])}</span>` : '—'}</b></div></div>`;
   const recent = r.links?.[0]?.length ? `<div class="note" style="margin:12px 0 4px">Most recent pancreatic cancer papers</div>${paperList(r.links[0], L.titles, compact ? 3 : 5)}` : '';
   const inType = !compact && r.top && r.links?.[1]?.length ? `<div class="note" style="margin:12px 0 4px">Most recent papers that also concern ${esc(typeNoun(r.top))} cells</div>${paperList(r.links[1], L.titles, 5)}` : '';
-  return `<div id="${id}" class="detail-sub">${head}${metrics}${litCaution(r.sym)}${compact ? '' : litTypeTable(L.cellTypes, r.obs, r.exp, r.enr, r.top)}${recent}${inType}<p class="note">${compact ? 'Counts show how much a gene has been studied, not that it is expressed or active. The Gene expression tab shows the breakdown by cell type for marker genes.' : esc(LIT_READING)}${r.sym !== gene ? ` Counted under the current symbol ${esc(r.sym)}.` : ''}</p></div>`;
+  return `<div id="${id}" class="detail-sub">${head}${metrics}${litCaution(r.sym)}${compact ? '' : LIT_HOWTO_HTML + litTypeTable(L.cellTypes, r.obs, r.exp, r.enr, r.top)}${recent}${inType}<p class="note">${compact ? 'Counts show how much a gene has been studied, not that it is expressed or active. The marker-gene panel of the Gene expression tab shows the breakdown by cell type.' : esc(LIT_READING)}${r.sym !== gene ? ` Counted under the current symbol ${esc(r.sym)}.` : ''}</p></div>`;
 }
 /* Genes studied most in connection with each cell type (Gene expression tab). */
 function celltypeLiteratureCard(d) {
@@ -769,11 +1011,11 @@ function celltypeLiteratureCard(d) {
   const t = types.includes(state.lit.type) ? state.lit.type : types.find(x => (C.cellTypes[x].topGenes || []).length >= 20) || types[0], k = C.cellTypes[t];
   const picker = `<div class="toggle-chips" role="group" aria-label="Cell type for the literature table" id="lit-type">${types.map((x, i) => `<button class="${x === t ? 'active' : ''}" data-littype="${esc(x)}" aria-pressed="${x === t}"><span class="swatch" style="background:${typeColor(x, i)}"></span>${esc(typeLabel(x).replace(' (gamma)', ''))}<small>${num(C.cellTypes[x].scopePapers)}</small></button>`).join('')}</div>`;
   const rows = (k.topGenes || []).map(([g, obs, exp, enr, all, pm]) => { const tt = pm?.length ? C.titles?.[String(pm[0])] : null; return `<tr><td><i>${esc(g)}</i>${DEMO().litCautions?.[g] ? ` <span class="badge warn" title="${esc(DEMO().litCautions[g])}">check name</span>` : ''}</td><td class="num">${num(obs)}</td><td class="num">${sig(exp)}</td><td class="num">${ratioCell(enr)}</td><td class="num">${num(all)}</td><td>${tt ? `<a href="https://pubmed.ncbi.nlm.nih.gov/${encodeURIComponent(pm[0])}/" target="_blank" rel="noopener">${esc(shorten(tt.t, 90))}</a><small>${esc([tt.j, tt.y].filter(Boolean).join(', '))}</small>` : '<span class="note">—</span>'}</td></tr>`; }).join('');
-  return shell(`${picker}<p class="note" style="margin:10px 0">${num(k.scopePapers)} pancreatic cancer papers concern ${esc(typeNoun(t))} cells. ${plural(k.topGenes.length, 'gene')} with at least 5 such papers, highest observed ÷ expected first${k.topGenes.length < 50 ? ' (few genes reach 5 papers for this cell type)' : ''}.</p>
+  return shell(`${picker}${LIT_HOWTO_HTML}<p class="note" style="margin:10px 0">${num(k.scopePapers)} pancreatic cancer papers concern ${esc(typeNoun(t))} cells. ${plural(k.topGenes.length, 'gene')} with at least 5 such papers, highest observed ÷ expected first${k.topGenes.length < 50 ? ' (few genes reach 5 papers for this cell type)' : ''}.</p>
     <div class="table-wrap" style="max-height:420px" data-scroll-id="lit-celltypes"><table class="table"><thead><tr><th>Gene</th><th class="num">Papers in ${esc(typeNoun(t))} cells</th><th class="num">Expected</th><th class="num">Observed ÷ expected</th><th class="num">All pancreatic cancer papers</th><th>Most recent paper</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty">No gene has 5 papers for this cell type.</td></tr>'}</tbody></table></div>
     <p class="note">${esc(LIT_READING)} In pancreatic cancer papers, “ductal” mostly refers to ductal adenocarcinoma: about a third of all papers match it, which limits the ratio for ductal cells to about 3.</p>`);
 }
-/* Literature on the member genes of a gene set (Signaling pathways tab). */
+/* Literature on the member genes of a gene set (Cell-type signaling tab). */
 function genesetLiteratureCard(d, g, s) {
   if (!s || (!d.genesetLitUrl && !d.genesetLit)) return '';
   const shell = body => `<section class="card section" id="gs-lit"><div class="card-head"><div><div class="card-title">Literature support: ${esc(s.label)}</div><div class="card-sub">Human pancreatic cancer papers on the member genes of this gene set, overall and by cell type</div></div><span class="badge accent">Pancreatic cancer</span></div><div class="card-body">${body}</div></section>`;
@@ -795,7 +1037,7 @@ function genesetLiteratureCard(d, g, s) {
       genes = `<div class="note" style="margin:0 0 6px">Genes of this set that contribute most to its score in ${esc(typeNoun(t))} cells (the genes of the plot above; choose the cell type there)</div><div class="table-wrap" style="max-height:360px" data-scroll-id="gs-lit-genes"><table class="table compact" id="gs-lit-genes"><thead><tr><th>Gene</th><th class="num">Pancreatic cancer papers</th><th class="num">Papers in ${esc(typeNoun(t))} cells</th><th class="num">Expected</th><th class="num">Observed ÷ expected</th><th>Most recent paper</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty">No gene to list for this cell type.</td></tr>'}</tbody></table></div>`;
     }
   }
-  return shell(`${metrics}<div class="grid halves" style="margin-top:14px"><div><div class="note" style="margin:0 0 6px">All member genes together, each paper counted once</div>${litTypeTable(L.cellTypes, obs, exp, enr, top)}</div><div>${genes}</div></div><p class="note">${esc(LIT_READING)} A gene set is counted on the papers of all its member genes; large sets collect many papers, so compare the ratios, not the counts.</p>`);
+  return shell(`${metrics}${LIT_HOWTO_HTML}<div class="grid halves" style="margin-top:14px"><div><div class="note" style="margin:0 0 6px">All member genes together, each paper counted once</div>${litTypeTable(L.cellTypes, obs, exp, enr, top)}</div><div>${genes}</div></div><p class="note">${esc(LIT_READING)} A gene set is counted on the papers of all its member genes; large sets collect many papers, so compare the ratios, not the counts.</p>`);
 }
 function geneRows(d) {
   const types = d.cellTypes, info = d.markerInfo || {}, de = new Map((d.comparison?.de?.table || []).map(r => [r.gene, r]));
@@ -825,21 +1067,42 @@ function groupStrip(vals, yLabel, { width = 360, height = 210 } = {}) {
     <p class="note" style="margin:4px 0 0">Points: samples${pairs.size ? '; gray lines join the tumor and adjacent sample of one patient' : ''}; black bars: group medians.</p>`;
 }
 function viewGenes() {
-  const d = state.data, rowsAll = geneRows(d), types = d.cellTypes, hasDE = !!d.comparison;
-  const head = pageHead('Gene expression', 'Marker genes across cell types', 'Mean estimated expression of pancreatic and PDAC marker genes in each cell type of the estimated single-cell profiles. Select a column header to sort and a gene to see its plots on the right.', rowsAll.length ? `<div class="controls"><button class="btn btn-secondary" data-action="exportgenes">${icon('download')} CSV</button></div>` : '');
-  if (!rowsAll.length) return `${head}<div class="card"><div class="empty">This result does not include marker-gene summaries.</div></div>`;
-  const cols = { gene: { v: r => r.gene }, known: { v: r => r.info?.marks ? `${r.info.order ?? 99}`.padStart(3, '0') + r.info.marks : null }, top: { v: r => (r.top ? typeLabel(r.top) : null) }, max: { v: r => r.max }, lead: { v: r => r.lead }, fc: { v: r => r.de?.log2FCShrunk ?? null }, padj: { v: r => r.de?.padj ?? null } };
-  const defKey = d.markerInfo ? 'known' : 'gene', rows = sortRows('genes', rowsAll, cols, defKey, 1);
-  const sel = rowsAll.find(r => r.gene === state.gene) || rows[0]; state.gene = sel.gene;
-  const th = (k, l, o = {}) => sortTh('genes', k, l, { defKey, defDir: 1, ...o });
-  const body = rows.map(r => `<tr class="clickable${r.gene === sel.gene ? ' selected' : ''}" data-gene="${esc(r.gene)}"><td><button type="button" class="name-link gene" data-gene="${esc(r.gene)}">${esc(r.gene)}</button>${r.info?.name ? `<small>${esc(r.info.name)}</small>` : ''}</td>
-    <td>${r.info?.marks ? esc(r.info.marks) : '<span class="note">—</span>'}</td><td>${r.top ? `<span class="swatch" style="background:${typeColor(r.top, r.b)};margin-right:6px"></span>${esc(typeLabel(r.top))}` : '—'}</td>
-    <td class="num">${sig(r.max)}</td><td class="num">${sig(r.lead)}</td>${hasDE ? `<td class="num">${r.de ? `<span class="heat" style="${diverge(r.de.log2FCShrunk, 3)}">${sig(r.de.log2FCShrunk)}</span>` : '—'}</td><td class="num">${r.de ? fmtP(r.de.padj) : '—'}</td>` : ''}</tr>`).join('');
-  const table = `<section class="card"><div class="card-head"><div><div class="card-title">Marker genes</div><div class="card-sub">${plural(rowsAll.length, 'gene')} · estimated expression in log(1 + counts per 10,000)${hasDE ? `; bulk fold change ${esc(d.comparison.test)} vs ${esc(d.comparison.reference)} from the group comparison` : ''}</div></div></div>
-    <div class="card-body table-wrap tall" data-scroll-id="genes-table"><table class="table"><thead><tr>${th('gene', 'Gene')}${th('known', 'Known marker of')}${th('top', 'Highest estimated in')}${th('max', 'Highest value', { num: true, title: 'Mean estimated expression in that cell type' })}${th('lead', 'Lead over other types', { num: true, title: 'Highest value minus the mean of the other cell types' })}${hasDE ? `${th('fc', 'Bulk log2 fold change', { num: true, title: `Shrunken log2 fold change, ${d.comparison.test} vs ${d.comparison.reference}` })}${th('padj', 'Adjusted p', { num: true })}` : ''}</tr></thead><tbody>${body}</tbody></table></div></section>`;
-  return `${head}<div class="split">${table}<aside class="detail">${geneDetail(d, sel)}</aside></div>
+  const d = state.data, c = d.comparison, rowsAll = geneRows(d), types = d.cellTypes, hasDE = !!c;
+  if (!c && d.comparisonUrl && !String(d.lazy.comparison || '').startsWith('error')) ensureLazy('comparison', checkComparison);
+  const intro = `${hasDE ? 'Genes that differ between the two groups of bulk samples, and the' : 'The'} mean estimated expression of pancreatic and PDAC marker genes in each cell type of the estimated single-cell profiles. Select a column header to sort and a gene to see its plots on the right.`;
+  const head = pageHead('Gene expression', hasDE ? 'Differential expression and marker genes' : 'Marker genes across cell types', intro,
+    `<div class="controls">${hasDE ? `<button class="btn btn-secondary" data-action="exportde">${icon('download')} Differential expression (CSV)</button>` : ''}${rowsAll.length ? `<button class="btn btn-secondary" data-action="exportgenes">${icon('download')} Marker genes (CSV)</button>` : ''}</div>`);
+  if (!rowsAll.length && !hasDE) return `${head}<div class="card"><div class="empty">This result does not include marker-gene summaries.</div></div>`;
+  let deBlock = '';
+  if (hasDE) {
+    const de = c.de, s = de.summary || {};
+    const kpis = [[c.test, de.nTest, 'Samples in the test group'], [c.reference, de.nReference, 'Samples in the reference group'], ['Genes tested', s.n_padj_defined ?? s.n_genes_tested, `${num(de.genesAfterFilter)} genes passed the expression filter`],
+      ['Differentially expressed genes', s.n_sig, `Adjusted p < 0.05: ${num(s.n_sig_up)} higher and ${num(s.n_sig_down)} lower in ${c.test}`]]
+      .map(([k, v, f]) => `<div class="card kpi"><div class="k-label">${esc(k)}</div><div class="k-value">${num(v)}</div><div class="k-foot">${esc(f)}</div></div>`).join('');
+    const notices = (c.notices || []).map(n => `<div class="alert warn">${esc(n)}</div>`).join('')
+      + (d.origin === 'demo' && DEMO().compareNote ? `<div class="banner" role="note" id="compare-note">${icon('info')}<div>${esc(DEMO().compareNote)}</div></div>` : '');
+    deBlock = `${notices}<div class="grid kpis">${kpis}</div>
+    <div class="section">${compareMethods(c, ['de'])}</div>
+    <h2 class="section-title" id="genes-de">Differential expression: ${esc(c.test)} vs ${esc(c.reference)} (bulk samples)</h2>
+    <div class="split" id="de-split"><div class="col-stack">${volcanoCard(c)}${deTableCard(c)}</div><aside class="detail">${deGeneDetail(d, c)}</aside></div>`;
+  }
+  let markerBlock = '';
+  if (rowsAll.length) {
+    const cols = { gene: { v: r => r.gene }, known: { v: r => r.info?.marks ? `${r.info.order ?? 99}`.padStart(3, '0') + r.info.marks : null }, top: { v: r => (r.top ? typeLabel(r.top) : null) }, max: { v: r => r.max }, lead: { v: r => r.lead }, fc: { v: r => r.de?.log2FCShrunk ?? null }, padj: { v: r => r.de?.padj ?? null } };
+    const defKey = d.markerInfo ? 'known' : 'gene', rows = sortRows('genes', rowsAll, cols, defKey, 1);
+    const sel = rowsAll.find(r => r.gene === state.gene) || rows[0]; state.gene = sel.gene;
+    const th = (k, l, o = {}) => sortTh('genes', k, l, { defKey, defDir: 1, ...o });
+    const body = rows.map(r => `<tr class="clickable${r.gene === sel.gene ? ' selected' : ''}" data-gene="${esc(r.gene)}"><td><button type="button" class="name-link gene" data-gene="${esc(r.gene)}">${esc(r.gene)}</button>${r.info?.name ? `<small>${esc(r.info.name)}</small>` : ''}</td>
+      <td>${r.info?.marks ? esc(r.info.marks) : '<span class="note">—</span>'}</td><td>${r.top ? `<span class="swatch" style="background:${typeColor(r.top, r.b)};margin-right:6px"></span>${esc(typeLabel(r.top))}` : '—'}</td>
+      <td class="num">${sig(r.max)}</td><td class="num">${sig(r.lead)}</td>${hasDE ? `<td class="num">${r.de ? `<span class="heat" style="${diverge(r.de.log2FCShrunk, 3)}">${sig(r.de.log2FCShrunk)}</span>` : '—'}</td><td class="num">${r.de ? fmtP(r.de.padj) : '—'}</td>` : ''}</tr>`).join('');
+    const table = `<section class="card"><div class="card-head"><div><div class="card-title">Marker genes</div><div class="card-sub">${plural(rowsAll.length, 'gene')} · estimated expression in log(1 + counts per 10,000)${hasDE ? `; bulk fold change ${esc(c.test)} vs ${esc(c.reference)} from the comparison above` : ''}</div></div></div>
+      <div class="card-body table-wrap tall" data-scroll-id="genes-table"><table class="table"><thead><tr>${th('gene', 'Gene')}${th('known', 'Known marker of')}${th('top', 'Highest estimated in')}${th('max', 'Highest value', { num: true, title: 'Mean estimated expression in that cell type' })}${th('lead', 'Lead over other types', { num: true, title: 'Highest value minus the mean of the other cell types' })}${hasDE ? `${th('fc', 'Bulk log2 fold change', { num: true, title: `Shrunken log2 fold change, ${c.test} vs ${c.reference}` })}${th('padj', 'Adjusted p', { num: true })}` : ''}</tr></thead><tbody>${body}</tbody></table></div></section>`;
+    markerBlock = `<h2 class="section-title" id="genes-markers">Marker genes across cell types</h2>
+    <div class="split" id="marker-split">${table}<aside class="detail">${geneDetail(d, sel)}</aside></div>
     ${celltypeLiteratureCard(d)}
     <p class="note">Estimated profiles are assigned to the nine cell types of the healthy pancreas reference. Malignant epithelial cells and cancer-associated fibroblasts have no reference type of their own; their expression is attributed mostly to the ductal and stellate types. Marker roles follow the reference annotation and the PDAC literature.</p>`;
+  }
+  return `${head}${oodBanner(d)}${deBlock}${markerBlock}`;
 }
 function geneDetail(d, r) {
   const types = d.cellTypes, vals = r.v.map((v, i) => ({ v, t: types[i] })).filter(x => Number.isFinite(x.v)).sort((a, b) => b.v - a.v), vmax = Math.max(...vals.map(x => x.v), 1e-9);
@@ -954,7 +1217,7 @@ async function loadBulkAll() {
   } catch (e) { d.lazy.bulkAll = `error: ${e.message}`; }
   /* redraw only when the selected gene was waiting for these values */
   const c = d.comparison, gene = c && (state.cmp.gene || deRows(c)[0]?.gene);
-  if (state.data === d && state.view === 'compare' && gene && !(d.bulkExpression?.values?.[gene] && c.de.table.some(x => x.gene === gene))) rerender();
+  if (state.data === d && state.view === 'genes' && gene && !(d.bulkExpression?.values?.[gene] && c.de.table.some(x => x.gene === gene))) rerender();
 }
 /* Demo results load large blocks on first use. */
 async function ensureLazy(key, check) {
@@ -968,7 +1231,7 @@ async function ensureLazy(key, check) {
   if (state.data === d) rerender();
 }
 /* Notice for samples that the healthy reference describes poorly. Not shown on the public demo, where each sample's
-   fit stays in the Samples table and in Compare groups; shown for analyses of a user's own data. */
+   fit stays in the Samples tab; shown for analyses of a user's own data. */
 function oodBanner(d) {
   const comp = d.comparison?.composition; if (!comp?.banner || d.origin === 'demo') return '';
   const counts = Object.entries(comp.bannerCounts || {}).map(([g, t]) => `${esc(t)} ${esc(g)}`).join('; ');
@@ -994,13 +1257,13 @@ function sourceMethodCard(g) {
         <li><b>Score.</b> For each profile and gene set, a univariate linear model regresses the profile's expression on set membership (PROGENy: on the footprint weights); the activity is the model's t-value (method of decoupler; Badia-i-Mompel et al., Bioinformatics Advances 2022). Positive: the set's genes are expressed above the profile's average gene.</li>
         <li><b>Summarize.</b> Mean per sample and cell type; the cell-type value is the mean over samples with at least 3 profiles of that type${g.perSampleAvailable ? '. Per-sample values are shown when a sample has at least 20 profiles of the cell type (10–19: low confidence)' : ''}.</li>
         <li><b>Top genes.</b> ${esc(g.topGenesDefinition || 'Not available for this result.')}</li>
-      </ol><p class="note" style="margin:6px 0 0">Gene sets with fewer than ${num(g.minGenesPerSet || 5)} genes among the scoring genes are not scored. Scores are relative units: compare them between cell types and samples of this analysis, not with other analyses. Tumor-versus-adjacent differences are tested on the bulk data in <a href="#compare" data-view="compare">Compare groups</a> (fgsea and decoupler on DESeq2 statistics).</p></div>
+      </ol><p class="note" style="margin:6px 0 0">Gene sets with fewer than ${num(g.minGenesPerSet || 5)} genes among the scoring genes are not scored. Scores are relative units: compare them between cell types and samples of this analysis, not with other analyses. Tumor-versus-adjacent differences are tested on the bulk data in <a href="#compare" data-view="compare">Bulk signaling</a> (fgsea and decoupler on DESeq2 statistics).</p></div>
     </div></div></section>`;
 }
 function viewSignaling() {
   const d = state.data, g = d.genesets;
   const intro = 'Activity of curated signaling and functional gene sets in each cell type of the estimated single-cell profiles. Select a column header to sort and a gene set to see its plots on the right.';
-  const head = pageHead('Signaling pathways', 'Signaling and functional pathways', intro, g ? `<div class="controls"><button class="btn btn-secondary" data-action="exportgenesets">${icon('download')} CSV</button></div>` : '');
+  const head = pageHead('Cell-type signaling', 'Signaling and functional pathways by cell type', intro, g ? `<div class="controls"><button class="btn btn-secondary" data-action="exportgenesets">${icon('download')} CSV</button></div>` : '');
   if (!g) {
     const st = d.lazy.genesets;
     if (d.genesetsUrl && !String(st || '').startsWith('error')) { ensureLazy('genesets', checkGenesets); return `${head}<div class="card"><div class="empty">Loading gene-set activity…</div></div>`; }
@@ -1042,6 +1305,7 @@ function genesetDetail(g, s, m) {
       <div class="metrics small"><div class="metric"><small>Genes used</small><b>${num(s.genesUsed)} <span class="of">of ${num(s.libraryGenes)}</span></b></div><div class="metric"><small>Highest in</small><b>${esc(hi ? typeLabel(types[hi.i]) : '—')}</b></div><div class="metric"><small>Lowest in</small><b>${esc(lo ? typeLabel(types[lo.i]) : '—')}</b></div></div>
       <div class="note" style="margin:14px 0 4px">Mean activity by cell type</div>${bars}
       ${genesetTypePlots(g, s)}
+      ${spatialPanel(state.data, 'set', s.id, s.label)}
       ${tg ? `<div class="note" style="margin:6px 0 4px">Top genes in each cell type (highest activity first)</div><table class="table compact topgenes"><tbody>${tg.map(x => `<tr><td><span class="swatch" style="background:${typeColor(x.t, x.i)};margin-right:6px"></span>${esc(typeLabel(x.t))}</td><td><span class="genes">${esc(x.genes.join(', ') || '—')}</span></td></tr>`).join('')}</tbody></table><p class="note">${esc(g.topGenesDefinition || '')}</p>` : '<p class="note">Top genes are not available for this result.</p>'}
       ${CONSENSUS[s.consensus] ? `<p class="note">${esc(CONSENSUS[s.consensus][0])}: ${esc(consensusHelp(s.consensus))}.</p>` : ''}
       <div class="detail-sub"><div class="note" style="margin:10px 0 4px;display:flex;justify-content:space-between;align-items:center"><span>Activity in each sample and cell type</span>${s.perSample ? `<button class="link-btn" data-action="exportgssamples">${icon('download')} CSV</button>` : ''}</div>${perSamplePlot(g, s)}</div></div></section>`;
@@ -1117,43 +1381,44 @@ function exportGenesetSamples() {
 }
 
 /* ---------- Group comparison ---------- */
-function compareMethods(c) {
+function compareMethods(c, parts = ['de', 'enrichment', 'progeny', 'composition']) {
   const de = c.de, m = c.methods || {};
-  return `<details class="advanced method-card" open><summary>How the groups are compared</summary><div class="grid halves" style="margin-top:8px"><ul class="plain">
-    <li><b>Differential expression</b>: ${esc(m.de || 'DESeq2 negative binomial model (PyDESeq2), Wald test')}; model ${esc(de.design === 'covariate + group' ? 'patient + group, so each tumor is compared with adjacent pancreas from the same patient' : 'group')}; ${esc(de.sizeFactors?.chosen === 'positive counts' ? 'size factors from positive counts' : 'median-of-ratios size factors')}; fold changes shrunken toward zero for low-count genes; adjusted p: Benjamini–Hochberg false discovery rate.</li>
-    <li><b>Pathway enrichment</b>: ${esc(m.enrichment || 'fgsea (multilevel) on the DESeq2 Wald statistics of all tested genes')}; gene sets with 15–500 genes from MSigDB Hallmark, Reactome, WikiPathways and GO Biological Process.</li></ul><ul class="plain">
-    <li><b>Signaling activity (PROGENy)</b>: ${esc(m.progeny || 'multivariate linear model (decoupler) of the Wald statistics on the PROGENy footprint weights, 500 genes per pathway')}.</li>
-    <li><b>Composition by group</b>: ${esc(c.composition?.test || 'two-sided rank-sum test per cell type, adjusted across cell types')} on the estimated cell-type fractions.</li>
-    <li>All tests use the bulk samples. Cell-type-level group comparisons are not shown for this dataset.</li></ul></div></details>`;
+  const li = {
+    de: `<li><b>Differential expression</b>: ${esc(m.de || 'DESeq2 negative binomial model (PyDESeq2), Wald test')}; model ${esc(de.design === 'covariate + group' ? 'patient + group, so each tumor is compared with adjacent pancreas from the same patient' : 'group')}; ${esc(de.sizeFactors?.chosen === 'positive counts' ? 'size factors from positive counts' : 'median-of-ratios size factors')}; fold changes shrunken toward zero for low-count genes; adjusted p: Benjamini–Hochberg false discovery rate.</li>`,
+    enrichment: `<li><b>Pathway enrichment</b>: ${esc(m.enrichment || 'fgsea (multilevel) on the DESeq2 Wald statistics of all tested genes')}; gene sets with 15–500 genes from MSigDB Hallmark, Reactome, WikiPathways and GO Biological Process.</li>`,
+    progeny: `<li><b>Signaling activity (PROGENy)</b>: ${esc(m.progeny || 'multivariate linear model (decoupler) of the Wald statistics on the PROGENy footprint weights, 500 genes per pathway')}.</li>`,
+    composition: `<li><b>Composition by group</b>: ${esc(c.composition?.test || 'two-sided rank-sum test per cell type, adjusted across cell types')} on the estimated cell-type fractions.</li>`,
+  };
+  return `<details class="advanced method-card" open><summary>How the groups are compared</summary><ul class="plain" style="margin-top:8px">${parts.map(k => li[k]).join('')}
+    <li>All tests use the bulk samples. Cell-type-level group comparisons are not shown for this dataset.</li></ul></details>`;
 }
 function viewCompare() {
   const d = state.data, c = d.comparison;
-  const intro = 'Two groups of bulk samples compared: differential gene expression, pathway enrichment and estimated cell-type composition by group. Select a column header to sort and a gene or gene set to see its plots on the right.';
+  const intro = 'Pathway-level differences between two groups of bulk samples: gene-set enrichment, signaling pathway activity and themes that agree across databases. Select a column header to sort and a gene set to see its plots on the right.';
   if (!c) {
     const st = d.lazy.comparison;
-    if (d.comparisonUrl && !String(st || '').startsWith('error')) { ensureLazy('comparison', checkComparison); return `${pageHead('Compare groups', 'Compare groups', intro)}<div class="card"><div class="empty">Loading the comparison…</div></div>`; }
-    return `${pageHead('Compare groups', 'Compare groups', intro)}<section class="card"><div class="card-body prose"><p>${st ? `The comparison could not be loaded (${esc(st.replace(/^error: /, ''))}).` : 'This analysis does not include a group comparison.'}</p>
+    if (d.comparisonUrl && !String(st || '').startsWith('error')) { ensureLazy('comparison', checkComparison); return `${pageHead('Bulk signaling', 'Bulk signaling', intro)}<div class="card"><div class="empty">Loading the comparison…</div></div>`; }
+    return `${pageHead('Bulk signaling', 'Bulk signaling', intro)}<section class="card"><div class="card-body prose"><p>${st ? `The comparison could not be loaded (${esc(st.replace(/^error: /, ''))}).` : 'This analysis does not include a group comparison.'}</p>
       <p>To compare groups, choose <b>New analysis</b>, upload your counts, open <b>Compare two groups</b> and assign samples to a test group and a reference group (at least 2 samples each).</p>
       <div class="controls"><button class="btn btn-primary" data-action="new">New analysis</button>${d.origin !== 'demo' ? '<button class="btn btn-secondary" data-action="demo">Open the PDAC demo</button>' : ''}</div></div></section>`;
   }
-  const de = c.de, s = de.summary || {};
-  const kpis = [[c.test, de.nTest, 'Samples in the test group'], [c.reference, de.nReference, 'Samples in the reference group'], ['Genes tested', s.n_padj_defined ?? s.n_genes_tested, `${num(de.genesAfterFilter)} genes passed the expression filter`],
-    ['Differentially expressed genes', s.n_sig, `Adjusted p < 0.05: ${num(s.n_sig_up)} higher and ${num(s.n_sig_down)} lower in ${c.test}`]]
+  const de = c.de, P = c.pathways || {}, cols = Object.values(P.collections || {});
+  const nSig = cols.reduce((a, k) => a + (k.significant || 0), 0), nTested = cols.reduce((a, k) => a + (k.tested || 0), 0), nThemes = (P.themes || []).length;
+  const kpis = [[c.test, de.nTest, 'Samples in the test group'], [c.reference, de.nReference, 'Samples in the reference group'],
+    ['Enriched gene sets', nSig, `Adjusted p < 0.05, of ${num(nTested)} tested in ${plural(cols.length, 'database')}`],
+    ['Themes consistent across databases', nThemes, 'Related gene sets that change the same way in more than one database']]
     .map(([k, v, f]) => `<div class="card kpi"><div class="k-label">${esc(k)}</div><div class="k-value">${num(v)}</div><div class="k-foot">${esc(f)}</div></div>`).join('');
   const notices = (c.notices || []).map(n => `<div class="alert warn">${esc(n)}</div>`).join('')
     + (d.origin === 'demo' && DEMO().compareNote ? `<div class="banner" role="note" id="compare-note">${icon('info')}<div>${esc(DEMO().compareNote)}</div></div>` : '');
-  return `${pageHead('Compare groups', `${c.test} vs ${c.reference}`, intro, `<div class="controls"><button class="btn btn-secondary" data-action="exportde">${icon('download')} Genes (CSV)</button><button class="btn btn-secondary" data-action="exportenrich">${icon('download')} Pathways (CSV)</button></div>`)}
+  return `${pageHead('Bulk signaling', `${c.test} vs ${c.reference}`, intro, `<div class="controls"><button class="btn btn-secondary" data-action="exportenrich">${icon('download')} Pathways (CSV)</button></div>`)}
   ${oodBanner(d)}${notices}
   <div class="grid kpis">${kpis}</div>
-  <div class="section">${compareMethods(c)}</div>
-  <h2 class="section-title">Differential expression</h2>
-  <div class="split">${'<div class="col-stack">' + volcanoCard(c) + deTableCard(c) + '</div>'}<aside class="detail">${deGeneDetail(d, c)}</aside></div>
+  <div class="section">${compareMethods(c, ['enrichment', 'progeny'])}</div>
+  <h2 class="section-title">Themes and signaling pathways</h2>
+  <div class="grid two section">${themesCard(c)}${progenyCard(c)}</div>
   <h2 class="section-title">Pathway enrichment</h2>
   ${enrichmentSplit(c)}
-  <div class="grid two section">${progenyCard(c)}${themesCard(c)}</div>
-  <h2 class="section-title">Estimated composition by group</h2>
-  <div class="section">${compositionCompare(c)}</div>
-  <p class="note">Bulk comparisons combine differences in composition with differences within cell types.</p>`;
+  <p class="note">Bulk comparisons combine differences in composition with differences within cell types. Gene-level results are in <a href="#genes" data-view="genes">Gene expression</a>, composition by group in <a href="#samples" data-view="samples">Samples</a>, and activity by cell type in <a href="#signaling" data-view="signaling">Cell-type signaling</a>.</p>`;
 }
 function deRows(c) {
   const q = state.cmp.geneSearch; let rows = c.de.table;
@@ -1196,13 +1461,13 @@ function deGeneDetail(d, c) {
   return `<section class="card"><div class="card-head"><div><div class="card-title"><i>${esc(gene)}</i></div><div class="card-sub">${dir === 'up' ? `Higher in ${esc(c.test)}` : dir === 'down' ? `Lower in ${esc(c.test)}` : 'Not significant'}</div></div><a class="badge" href="https://www.ncbi.nlm.nih.gov/gene/?term=${encodeURIComponent(gene)}%5Bsym%5D+AND+human%5Borgn%5D" target="_blank" rel="noopener">NCBI Gene</a></div>
     <div class="card-body"><div class="metrics small"><div class="metric"><small>Shrunken log2 fold change</small><b>${sig(fc)}</b></div><div class="metric"><small>Adjusted p</small><b>${fmtP(padj)}</b></div><div class="metric"><small>Mean normalized count</small><b id="cmp-basemean">${baseMean !== null ? num(baseMean, 0) : pending ? '…' : '—'}</b></div></div>
       ${bulk ? `<div class="note" style="margin:16px 0 4px">Bulk expression in each sample, ${esc(bg.unit || 'log2(normalized count + 1)')}</div>${groupStrip(bulk, bg.unitShort || 'log2 normalized count', { width: 330, height: 190 })}` : pending ? '<p class="note" id="cmp-bulk-pending">Loading the per-sample values of this gene…</p>' : d.bulkAllUrl ? '<p class="note">The per-sample values of this gene could not be loaded.</p>' : '<p class="note">Per-sample values of this gene are in the results download.</p>'}
-      ${where}${geneLiterature(d, gene, { compact: true, id: 'cmp-gene-lit' })}</div></section>`;
+      ${where}${tumorNote(d, gene)}${geneLiterature(d, gene, { compact: true, id: 'cmp-gene-lit' })}</div></section>`;
 }
 async function drawVolcano() {
   const holder = $('#volcano'); if (!holder) return;
   const c = state.data.comparison, pts = c.de.volcano.points, selGene = state.cmp.gene || deRows(c)[0]?.gene;
   try {
-    const Plotly = await loadPlotly(); if (state.view !== 'compare' || !$('#volcano')) return;
+    const Plotly = await loadPlotly(); if (state.view !== 'genes' || !$('#volcano')) return;
     let gl = false; try { gl = !!document.createElement('canvas').getContext('webgl'); } catch (e) { gl = false; }
     const groups = [['ns', 'Adjusted p ≥ 0.05', '#98a2b3', 4], ['down', `Lower in ${c.test}`, '#175cd3', 5.5], ['up', `Higher in ${c.test}`, '#b42318', 5.5]];
     const traces = groups.map(([key, name, color, size]) => {
@@ -1257,7 +1522,7 @@ function enrichmentDetail(c, r) {
       <div class="metrics small"><div class="metric"><small>Enrichment score</small><b>${sig(r.nes)}</b></div><div class="metric"><small>Adjusted p</small><b>${fmtP(r.padj)}</b></div><div class="metric"><small>Genes in set</small><b>${num(r.size)}</b></div></div>
       <p class="note">${r.padj < 0.05 ? `The set's genes rank toward ${r.nes > 0 ? 'higher' : 'lower'} expression in ${esc(c.test)} than expected by chance.` : 'Not significant at adjusted p < 0.05.'}</p>
       ${genes.length ? `<div class="note" style="margin:12px 0 4px">Leading-edge genes (the genes driving the score) and their shrunken log2 fold change</div>${divergingBars(genes, `log2 fold change (${c.test} vs ${c.reference})`, { labelWidth: 90, width: 300, row: 21 })}` : '<p class="note">No leading-edge genes are listed for this set.</p>'}
-      ${r.theme && r.theme !== r.label ? `<p class="note">Theme: ${esc(r.theme)}.</p>` : ''}</div></section>`;
+      ${r.theme && r.theme !== r.label ? `<p class="note">Theme: ${esc(r.theme)}.</p>` : ''}${spatialPanel(state.data, 'set', r.id, r.label)}</div></section>`;
 }
 function progenyCard(c) {
   const p = c.pathways?.progeny || [];
@@ -1265,16 +1530,16 @@ function progenyCard(c) {
   return `<section class="card"><div class="card-head"><div><div class="card-title">Signaling pathway activity (PROGENy)</div><div class="card-sub">Activity of 14 signaling pathways inferred from their response genes, ${esc(c.test)} vs ${esc(c.reference)} (* adjusted p < 0.05). Database: PROGENy, ${esc(GS_DB.PROGENY.version)}</div></div></div>
     <div class="card-body">${items.length ? divergingBars(items, `Pathway activity score (${c.test} vs ${c.reference})`, { labelWidth: 120, width: 400, row: 22 }) : '<div class="empty">Pathway activity is not available for this comparison.</div>'}</div></section>`;
 }
-function themesCard(c) {
-  const P = c.pathways || {}, th = P.themes || [], bm = (P.bestMatches || []).filter(r => r.query_padj < 0.05);
+function themesCard(c, { limit = 0 } = {}) {
+  const P = c.pathways || {}, all = P.themes || [], th = limit ? all.slice(0, limit) : all, bm = limit ? [] : (P.bestMatches || []).filter(r => r.query_padj < 0.05);
   const rows = th.map(t => `<tr><td><b style="font-weight:600">${esc(t.theme_label)}</b><small>${esc(t.top_set || '')}</small></td><td><span class="badge ${t.call === 'up' ? 'warn' : 'accent'}">${t.call === 'up' ? `Higher in ${esc(c.test)}` : `Lower in ${esc(c.test)}`}</span></td><td>${esc(String(t.collections_up || t.collections_down || '').split(',').filter(Boolean).map(x => GS_LABEL[x] || x).join(', '))}</td><td class="num">${num(t.n_sig_sets)} of ${num(t.n_tested)}</td></tr>`).join('');
   const bmRows = bm.map(r => `<tr><td>${esc(GS_LABEL[r.query_collection] || r.query_collection)}: ${esc(String(r.query_set).replace(/^(HALLMARK|PROGENY)_/, '').replace(/_/g, ' ').toLowerCase())}</td><td class="num">${sig(r.query_score)}</td><td class="num">${num(r.n_matches_sig_same_sign)} of ${num(r.n_matches_tested)}</td><td class="num">${num(r.n_matches_sig_opposite)}</td></tr>`).join('');
-  return `<section class="card"><div class="card-head"><div><div class="card-title">Themes consistent across databases</div><div class="card-sub">Themes of related gene sets that change in the same direction in more than one database</div></div></div>
-    <div class="card-body">${rows ? `<div class="table-wrap" style="max-height:300px"><table class="table"><thead><tr><th>Theme</th><th>Direction</th><th>Databases</th><th class="num">Significant sets</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="note">No theme changed consistently across databases.</p>'}
+  return `<section class="card" id="themes-card"><div class="card-head"><div><div class="card-title">Themes consistent across databases</div><div class="card-sub">Themes of related gene sets that change in the same direction in more than one database${limit && all.length > th.length ? `; ${num(th.length)} of ${num(all.length)} shown` : ` (${num(all.length)})`}</div></div><span class="badge accent">${icon('database')} Cross-database</span></div>
+    <div class="card-body">${rows ? `<div class="table-wrap" style="max-height:${limit ? 'none' : '360px'}"><table class="table"><thead><tr><th>Theme</th><th>Direction</th><th>Databases</th><th class="num">Significant sets</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="note">No theme changed consistently across databases.</p>'}
     ${bmRows ? `<div class="note" style="margin:14px 0 4px">Significant Hallmark and PROGENy sets and their best-matching sets in other databases</div><div class="table-wrap" style="max-height:300px"><table class="table"><thead><tr><th>Gene set</th><th class="num">Score</th><th class="num">Matches, same direction</th><th class="num">Matches, opposite</th></tr></thead><tbody>${bmRows}</tbody></table></div>` : ''}
-    <p class="note">${esc(P.themeCaveat || '')}</p></div></section>`;
+    <p class="note">${esc(P.themeCaveat || '')}</p></div>${limit ? `<div class="card-foot"><span></span><button class="link-btn" data-view="compare">All themes and pathway enrichment →</button></div>` : ''}</section>`;
 }
-function compositionCompare(c) {
+function compositionCompare(c, { body = false } = {}) {
   const comp = c.composition;
   if (!comp) return '<section class="card"><div class="card-body"><div class="empty">Composition was not estimated for this comparison.</div></div></section>';
   const types = comp.table.map(r => r.cell_type), samples = Object.keys(comp.fractions);
@@ -1301,11 +1566,11 @@ function compositionCompare(c) {
   const fc = { sm: { v: r => sampleLabel(r.sm) }, g: { v: r => r.g }, r: { v: r => r.fit_r }, u: { v: r => r.unexplained }, o: { v: r => (r.outside_reference ? 'Outside' : 'Within') } };
   const fth = (k, l, o = {}) => sortTh('fit', k, l, { defKey: 'r', defDir: 1, ...o });
   const fitRows = sortRows('fit', fitAll, fc, 'r', 1).map(f => `<tr><td>${esc(sampleLabel(f.sm))}</td><td>${esc(f.g)}</td><td class="num">${sig(f.fit_r)}</td><td class="num">${Number.isFinite(f.unexplained) ? (f.unexplained * 100).toFixed(1) : '—'}</td><td>${f.outside_reference ? '<span class="badge warn">Outside</span>' : 'Within'}</td></tr>`).join('');
-  return `<section class="card"><div class="card-head"><div><div class="card-title">Composition by group</div><div class="card-sub">Estimated fraction of cells of each type in every sample (%), healthy pancreas reference types</div></div></div>
-    <div class="card-body"><div class="grid halves"><div>${svg}<div class="legend static"><span><span class="swatch" style="background:${col[c.test]}"></span>${esc(c.test)}</span><span><span class="swatch" style="background:${col[c.reference]}"></span>${esc(c.reference)}</span><span><svg width="12" height="12" aria-hidden="true"><circle cx="6" cy="6" r="4" fill="#fff" stroke="#667085" stroke-width="1.2"/></svg>Sample outside the healthy reference</span></div></div>
+  const inner = `<div class="grid halves"><div>${svg}<div class="legend static"><span><span class="swatch" style="background:${col[c.test]}"></span>${esc(c.test)}</span><span><span class="swatch" style="background:${col[c.reference]}"></span>${esc(c.reference)}</span><span><svg width="12" height="12" aria-hidden="true"><circle cx="6" cy="6" r="4" fill="#fff" stroke="#667085" stroke-width="1.2"/></svg>Sample outside the healthy reference</span></div></div>
     <div><div class="table-wrap" data-scroll-id="comp-table"><table class="table"><thead><tr>${th('type', 'Cell type')}${th('mt', `Median, ${esc(c.test)} (%)`, { num: true })}${th('mr', `Median, ${esc(c.reference)} (%)`, { num: true })}${th('diff', 'Difference (points)', { num: true, title: 'Percentage points' })}${th('padj', 'Adjusted p', { num: true })}</tr></thead><tbody>${rows}</tbody></table></div>
     <p class="note">Test: ${esc(comp.test || 'two-sided rank-sum test per cell type, adjusted across cell types')}. Tumor cells and cancer-associated fibroblasts have no reference type; their share is absorbed into the nearest types (mostly ductal and stellate).</p></div></div>
-    ${fitRows ? `<details class="advanced"><summary>How well each sample fits the healthy reference</summary><p class="note">Each sample is described as a mixture of the reference cell types. A sample is flagged as outside the reference when the correlation between its expression and the best mixture is below ${sig(thr.fit_r_min)} or the share of expression the mixture leaves unexplained exceeds ${Number.isFinite(thr.unexplained_max) ? (thr.unexplained_max * 100).toFixed(0) : '—'}%.</p><div class="table-wrap" style="max-height:300px" data-scroll-id="fit-table"><table class="table"><thead><tr>${fth('sm', 'Sample')}${fth('g', 'Group')}${fth('r', 'Fit correlation', { num: true })}${fth('u', 'Unexplained (%)', { num: true })}${fth('o', 'Reference')}</tr></thead><tbody>${fitRows}</tbody></table></div></details>` : ''}</div></section>`;
+    ${fitRows ? `<details class="advanced"><summary>How well each sample fits the healthy reference</summary><p class="note">Each sample is described as a mixture of the reference cell types. A sample is flagged as outside the reference when the correlation between its expression and the best mixture is below ${sig(thr.fit_r_min)} or the share of expression the mixture leaves unexplained exceeds ${Number.isFinite(thr.unexplained_max) ? (thr.unexplained_max * 100).toFixed(0) : '—'}%.</p><div class="table-wrap" style="max-height:300px" data-scroll-id="fit-table"><table class="table"><thead><tr>${fth('sm', 'Sample')}${fth('g', 'Group')}${fth('r', 'Fit correlation', { num: true })}${fth('u', 'Unexplained (%)', { num: true })}${fth('o', 'Reference')}</tr></thead><tbody>${fitRows}</tbody></table></div></details>` : ''}`;
+  return body ? inner : `<section class="card"><div class="card-head"><div><div class="card-title">Composition by group</div><div class="card-sub">Estimated fraction of cells of each type in every sample (%), healthy pancreas reference types</div></div></div><div class="card-body">${inner}</div></section>`;
 }
 function exportDE() {
   const c = state.data.comparison; if (!c) return toast('This result has no comparison.');
@@ -1320,19 +1585,103 @@ function exportEnrichment() {
   download('cellaris-comparison-pathways.csv', rows.map(r => r.map(csvCell).join(',')).join('\n'));
 }
 
+/* ---------- Spatial views: a pathway's score on a public PDAC tissue section ---------- */
+function checkSpatial(b) {
+  if (!b || !Array.isArray(b.sections) || !b.sections.length || !Array.isArray(b.chunks) || typeof b.sets !== 'object') throw new Error('Invalid spatial index.');
+  for (const s of b.sections) if (!Array.isArray(s.x) || !Array.isArray(s.y) || s.x.length !== s.y.length) throw new Error('Invalid tissue section.');
+  return b;
+}
+/* kind: 'set' (signaling and functional gene sets, activity score) or 'metabolic' (KEGG pathways, expression of the enzyme genes) */
+function spatialPanel(d, kind, id, label) {
+  if (!d.spatialUrl && !d.spatial) return '';
+  const what = kind === 'metabolic' ? 'mean expression of the pathway\u2019s enzyme genes' : 'activity score of this gene set';
+  const head = `<div class="note" style="margin:10px 0 6px"><b style="color:var(--ink-2)">On a tissue section</b> · ${what} across a public PDAC tissue section</div>`;
+  const S = d.spatial, st = String(d.lazy.spatial || '');
+  if (!S) {
+    if (!st.startsWith('error')) ensureLazy('spatial', checkSpatial);
+    return `<div class="detail-sub spatial">${head}<p class="note">${st.startsWith('error') ? `The spatial view could not be loaded (${esc(st.replace(/^error: /, ''))}).` : 'Loading the spatial view…'}</p></div>`;
+  }
+  const ref = (kind === 'metabolic' ? S.metabolic : S.sets)?.[id];
+  if (ref === undefined || ref === null) return `<div class="detail-sub spatial" data-spatial-missing>${head}<p class="note">No tissue view: ${kind === 'metabolic' ? 'none of this pathway\u2019s enzyme genes are' : 'fewer than 5 of this set\u2019s genes are'} measured on the section.</p></div>`;
+  const sec = S.sections.find(x => x.id === state.spatial.section) || S.sections[0];
+  const used = S.genesUsed?.[sec.id]?.[id], area = sec.binUm ? `${num(sec.nSpots)} areas of about ${sig(sec.binUm / 1000)} mm` : `${num(sec.nSpots)} spots`;
+  const picker = S.sections.length > 1 ? `<div class="toggle-chips" role="group" aria-label="Tissue section" style="margin-bottom:8px">${S.sections.map(x => `<button class="${x.id === sec.id ? 'active' : ''}" data-spsection="${esc(x.id)}" aria-pressed="${x.id === sec.id}">${esc(x.label)}</button>`).join('')}</div>` : '';
+  const regions = sec.regions?.labels?.length ? `<button type="button" class="link-btn" data-action="spregions">${state.spatial.regions ? 'Show the score' : 'Show the annotated regions'}</button>` : '';
+  return `<div class="detail-sub spatial" id="spatial-${kind}">${head}${picker}
+    <div class="spatial-frame" data-spatial-kind="${kind}" data-spatial-id="${esc(id)}" data-spatial-section="${esc(sec.id)}" data-spatial-label="${esc(label)}"><div class="empty">Loading the section…</div></div>
+    <div class="spatial-actions"><button type="button" class="link-btn" data-action="spzoom" data-spkind="${kind}" data-spid="${esc(id)}" data-splabel="${esc(label)}">Enlarge</button>${regions}</div>
+    <p class="note" data-spatial-source><b>${esc(sec.label)}</b> · ${area}${Number.isFinite(used) ? ` · ${kind === 'metabolic' ? `${plural(used, 'enzyme gene')} of this pathway` : `${plural(used, 'gene')} of this set`} measured on the section` : ''}. Data: ${sec.url ? `<a href="${esc(sec.url)}" target="_blank" rel="noopener">${esc(String(sec.url).replace(/^https:\/\/doi\.org\//, 'doi:'))}</a>` : esc(sec.dataset || '')}${sec.license ? `, ${sec.licenseUrl ? `<a href="${esc(sec.licenseUrl)}" target="_blank" rel="noopener">${esc(sec.license.replace(/ \(.*\)$/, ''))}</a>` : esc(sec.license)}` : ''}.${sec.changes ? ` Changes: ${esc(sec.changes.charAt(0).toLowerCase() + sec.changes.slice(1))}` : ''} Full credit in About.</p>
+    <p class="note" data-spatial-caveat>${esc(DEMO().spatialCaveat || 'This section comes from a different patient than the bulk samples analyzed here. It is one section from one tumor, shown as an example. Scores are relative within the section: compare areas of the section with each other, not with the cell-type or sample values elsewhere. Each area contains many cells of several types.')}${kind === 'metabolic' ? ' This is gene expression measured in the tissue, not the pathway activity estimated by the metabolic model.' : ''}</p></div>`;
+}
+function decodeBytes(q) { const s = atob(q), a = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i); return a; }
+const VIRIDIS = ['#440154', '#3b528b', '#21918c', '#5ec962', '#fde725'];
+const VIRIDIS_LUT = Array.from({ length: 255 }, (_, k) => { const t = Math.min(.999, k / 254) * 4, i = Math.floor(t); return mix(VIRIDIS[i], VIRIDIS[i + 1], t - i); });
+const REGION_COLORS = ['#b42318', '#f97066', '#ddcc77', '#0072b2', '#56b4e9', '#98a2b3', '#d55e00', '#882255', '#7a5af8', '#12805c', '#f2c94c', '#5f6b76'];
+function spatialSvg(sec, rec, kind, label, W = 360) {
+  const n = sec.x.length, q = rec ? decodeBytes(rec.q) : null, pad = 4, reg = state.spatial.regions && sec.regions?.labels?.length ? sec.regions : null;
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  for (let i = 0; i < n; i++) { const x = sec.x[i], y = sec.y[i]; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+  /* each area is drawn as a rectangle of the bin size (or a square of the mean spacing when no size is given) */
+  const pitch = Math.sqrt(((x1 - x0) * (y1 - y0)) / Math.max(1, n)) || 1, bwU = sec.binWidthUm || sec.binUm || pitch, bhU = sec.binHeightUm || sec.binUm || pitch;
+  const sx = (W - 2 * pad) / ((x1 - x0 + bwU) || 1), Hh = (y1 - y0 + bhU) * sx + 2 * pad, bw = (bwU * sx + .25).toFixed(2), bh = (bhU * sx + .25).toFixed(2);
+  /* color limits: 2nd and 98th percentile of the section, so that a few extreme areas do not flatten the scale */
+  let b2 = 0, b98 = 254;
+  if (q && !reg) {
+    const hist = new Array(256).fill(0); let m = 0;
+    for (let i = 0; i < n; i++) if (q[i] !== 255) { hist[q[i]]++; m++; }
+    let acc = 0, lo = null, hi = null;
+    for (let b = 0; b < 255; b++) { acc += hist[b]; if (lo === null && acc >= m * .02) lo = b; if (hi === null && acc >= m * .98) hi = b; }
+    if (lo !== null && hi !== null && hi > lo) { b2 = lo; b98 = hi; }
+  }
+  const lut = v => VIRIDIS_LUT[Math.max(0, Math.min(254, Math.round((v - b2) / (b98 - b2) * 254)))];
+  const parts = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const v = q ? q[i] : 255, fill = reg ? REGION_COLORS[reg.spot[i] % REGION_COLORS.length] : v === 255 ? '#e4e7ec' : lut(v);
+    parts[i] = `<rect x="${(pad + (sec.x[i] - x0) * sx).toFixed(1)}" y="${(pad + (sec.y[i] - y0) * sx).toFixed(1)}" width="${bw}" height="${bh}" fill="${fill}"/>`;
+  }
+  const val = b => rec.lo + b / 254 * (rec.hi - rec.lo);
+  const bar = reg
+    ? `<div class="legend static spatial-regions">${reg.labels.map((l, k) => `<span><span class="swatch" style="background:${REGION_COLORS[k % REGION_COLORS.length]}"></span>${esc(l)}</span>`).join('')}</div>`
+    : `<div class="spatial-scale" role="img" aria-label="Color scale from ${sig(val(b2))} to ${sig(val(b98))}"><span>${sig(val(b2))}</span><i></i><span>${sig(val(b98))}</span><small>${kind === 'metabolic' ? 'Mean expression of the enzyme genes, log(1 + counts per 10,000)' : 'Score (relative units within the section)'} · color range: 2nd to 98th percentile of the section</small></div>`;
+  return `<svg class="spatial-svg" viewBox="0 0 ${W} ${Hh.toFixed(0)}" role="img" aria-label="${esc(label)} on the tissue section ${esc(sec.label)}" data-spots="${n}">${parts.join('')}</svg>${bar}`;
+}
+async function drawSpatial() {
+  const d = state.data, S = d.spatial; if (!S) return;
+  for (const el of $$('.spatial-frame')) {
+    const { spatialKind: kind, spatialId: id, spatialSection: sid, spatialLabel: label } = el.dataset, ref = (kind === 'metabolic' ? S.metabolic : S.sets)?.[id];
+    if (ref === undefined || ref === null) continue;
+    const ci = Array.isArray(ref) ? ref[0] : ref;
+    try {
+      d.spatialChunks[ci] ||= fetch(S.chunks[ci]).then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); });
+      const chunk = await d.spatialChunks[ci];
+      if (state.data !== d || !el.isConnected) continue;
+      const rec = chunk.sets?.[id]?.[sid], sec = S.sections.find(x => x.id === sid);
+      el.innerHTML = rec && sec ? spatialSvg(sec, rec, kind, label, el.classList.contains('big') ? 820 : 360) : '<div class="empty">Not scored on this section.</div>';
+      el.dataset.drawn = rec && sec ? '1' : '0';
+    } catch (e) { delete d.spatialChunks[ci]; if (el.isConnected) el.innerHTML = `<div class="empty">The section could not be loaded (${esc(e.message)}).</div>`; }
+  }
+}
+function spatialZoom(kind, id, label) {
+  const S = state.data.spatial; if (!S) return;
+  const sec = S.sections.find(x => x.id === state.spatial.section) || S.sections[0];
+  modal(esc(label), `${esc(sec.label)} · ${kind === 'metabolic' ? 'mean expression of the pathway\u2019s enzyme genes' : 'activity score of the gene set'}`,
+    `<div class="spatial-frame big" data-spatial-kind="${kind}" data-spatial-id="${esc(id)}" data-spatial-section="${esc(sec.id)}" data-spatial-label="${esc(label)}"><div class="empty">Loading the section…</div></div>`, '', true);
+  drawSpatial();
+}
+
 /* ---------- Figures ---------- */
 function mapComparisonCard(mc, isOwn) {
   if (!mc) return '';
   const p = v => (!Number.isFinite(v) ? '—' : v > 0 && v < 0.01 ? `${(v * 100).toFixed(1)}%` : `${Math.round(v * 100)}%`);
   const rows = (mc.byType || []).map(r => `<tr><td><span class="swatch" style="background:${typeColor(r.type)};margin-right:6px"></span>${esc(typeLabel(r.type))}</td><td class="num">${num(r.n)}</td><td class="num">${p(r.purityExpression)}</td><td class="num">${p(r.purityMetabolic)}</td><td class="num">${p(r.overlap)}</td><td>${(r.metabolicNeighbors || []).map(([u, v]) => `${esc(typeLabel(u))} ${p(v)}`).join(', ') || '<span class="note">—</span>'}</td></tr>`).join('');
-  return `<section class="card section" id="map-compare"><div class="card-head"><div><div class="card-title">Does the metabolic map look like the expression map?</div><div class="card-sub">The same ${num(mc.profiles)} estimated profiles placed by gene expression and by estimated metabolic activity${isOwn ? '' : ' (PDAC demo)'}</div></div><button class="btn btn-secondary" data-view="overview">Open the maps</button></div>
+  return `<section class="card section" id="map-compare"><div class="card-head"><div><div class="card-title">Does the metabolic map look like the expression map?</div><div class="card-sub">The same ${num(mc.profiles)} estimated profiles placed by gene expression and by estimated metabolic activity${isOwn ? '' : ' (PDAC demo)'}</div></div><button class="btn btn-secondary" data-view="samples">Open the maps</button></div>
     <div class="card-body"><div class="metrics four"><div class="metric"><small>Shared nearest neighbors</small><b>${p(mc.overlap)}</b><span class="of">${p(mc.overlapRandom)} expected by chance</span></div>
       <div class="metric"><small>Neighbors of the same cell type</small><b>${p(mc.purityExpression)} <span class="of">expression</span></b><b>${p(mc.purityMetabolic)} <span class="of">metabolic</span></b></div>
       <div class="metric"><small>Neighbors from the same sample</small><b>${p(mc.sameSampleMetabolic)}</b><span class="of">${p(mc.sameSampleMixed)} if samples were fully mixed</span></div>
       <div class="metric"><small>Pathway variation within cell types</small><b>${p(mc.withinShareMedian)}</b><span class="of">median over pathways (${p(mc.withinShareMin)}–${p(mc.withinShareMax)})</span></div></div>
       <div style="margin-top:14px"><div class="prose two-col"><p><b>${mc.overlap < 0.1 ? 'No: the two maps are organized differently.' : 'No: the two maps are related but organized differently.'}</b> On average ${p(mc.overlap)} of each profile's ${num(mc.k)} nearest neighbors are the same in both maps${mc.copiesExcluded ? ` (${p(mc.overlapRandom)} expected by chance; profiles that derive from the same reference cell are not counted as neighbors)` : ''}. Gene expression keeps every cell type apart, which makes the expression map the place to check cell-type assignments. The metabolic map groups cell types that share metabolic programs: the table shows which other types each cell type mixes with.</p>
         <p><b>Why the metabolic map is useful.</b> For most pathways, most of the variation between profiles lies within cell types (median ${p(mc.withinShareMedian)}). The metabolic map arranges this variation into gradients: neighbors in the metabolic map have more similar pathway activity than neighbors in the expression map (median correlation ${sig(mc.autocorrMetabolicMedian)} vs ${sig(mc.autocorrExpressionMedian)}). Profiles of one cell type that sit apart in the metabolic map differ in estimated metabolism.</p>
-        <ul class="plain"><li><b>Check cell types</b> in the expression map (Overview, Expression).</li><li><b>Find shared metabolic programs</b>: cell types that overlap in the metabolic map.</li><li><b>Find metabolic heterogeneity</b>: color the metabolic map by metabolic activity, or select a pathway in <a href="#pathways" data-view="pathways">Metabolic pathways</a>.</li></ul>
+        <ul class="plain"><li><b>Check cell types</b> in the expression map (Samples, Expression).</li><li><b>Find shared metabolic programs</b>: cell types that overlap in the metabolic map.</li><li><b>Find metabolic heterogeneity</b>: color the metabolic map by metabolic activity, or select a pathway in <a href="#pathways" data-view="pathways">Metabolic pathways</a>.</li></ul>
         <p class="note">Neighborhoods are computed in the full spaces (expression: ${esc(mc.expressionSpace || '')}; metabolic: ${esc(mc.metabolicSpace || '')}), not on the 2-D maps.${mc.layoutNote ? ` ${esc(mc.layoutNote)}` : ''} The metabolic map comes from the same model as the activity values, so their agreement is partly expected by construction.</p></div>
       <div class="table-wrap" style="margin-top:12px"><table class="table compact"><thead><tr><th>Cell type</th><th class="num">Profiles</th><th class="num" title="Share of the 15 nearest neighbors of the same cell type">Same type, expression</th><th class="num">Same type, metabolic</th><th class="num" title="Share of nearest neighbors shared between the two maps">Shared neighbors</th><th>Mixes with, in the metabolic map (≥ 5% of neighbors)</th></tr></thead><tbody>${rows}</tbody></table></div></div></div></section>`;
 }
@@ -1351,7 +1700,7 @@ function viewFigures() {
 function viewAbout() {
   const d = state.data, demo = DEMO(), lm = literatureMeta();
   const nSets = d.genesets ? Object.values(d.genesets.collections).reduce((a, k) => a + (k.scorableSets || 0), 0) : null;
-  const facts = [['Samples', num(d.counts.samples)], ['Estimated single-cell profiles', num(d.counts.cells)], ['Cell types', num(d.cellTypes.length)],
+  const facts = [...(d.origin === 'demo' && demo.build?.label ? [['Build', esc(demo.build.label)]] : []), ['Samples', num(d.counts.samples)], ['Estimated single-cell profiles', num(d.counts.cells)], ['Cell types', num(d.cellTypes.length)],
     ...(d.metabolic ? [['KEGG pathways scored', num(d.pathways.length)], ['Metabolic reactions', num(d.counts.reactions)]] : [['Metabolic model', 'Not run']]),
     ...(nSets ? [['Gene sets scored', num(nSets)]] : []), ...(d.comparison ? [['Groups compared', `${esc(d.comparison.test)} vs ${esc(d.comparison.reference)}`]] : [])];
   const lsrc = lm?.sources || {};
@@ -1376,7 +1725,7 @@ function viewAbout() {
         <h4>Metabolic pathways</h4><p>A graph-based model of the KEGG reaction network estimates the activity of ${num(d.counts.reactions || 1225)} metabolic reactions in every profile. A pathway's activity is the mean activity of its reactions, in relative units, averaged per cell type. Pathway maps are drawn from the KEGG reference pathways; each line is a reaction step of the model.</p></div>
       <div><h4>Signaling and functional pathways</h4><p>Gene sets from MSigDB v2026.2.Hs (Hallmark; Reactome release 97; WikiPathways 2026-10-10; GO Biological Process, GO release 2026-07-26) and PROGENy (14 pathways, 500 footprint genes each) are scored in every estimated profile with a univariate linear model (t-value; decoupler method) on log(1 + counts per 10,000), then averaged per sample and cell type. Top genes are the member genes that contribute most to the score in each cell type.</p>
         <h4>Group comparison</h4><p>Bulk counts: DESeq2 (PyDESeq2 0.5.4) with the patient as covariate, shrunken fold changes, Benjamini–Hochberg adjustment; fgsea multilevel enrichment of the Wald statistics (15–500 genes per set); PROGENy activity by a decoupler 2.2.0 multivariate linear model; estimated composition by a two-sided rank-sum test per cell type.</p>
-        <h4>Literature support</h4><p>${esc(lm?.name || 'Human pancreas literature')} index ${esc(lm?.version || '')}: ${num(lm?.papers)} ${esc(scopeInfo().noun)} with PubTator3 gene annotations${lsrc.genePapers ? ` (${esc(lsrc.genePapers)})` : ''}, matched to the enzymes of each reaction step; curated enzyme evidence from ${esc(lsrc.curated || 'UniProtKB/Swiss-Prot')}.</p>${DEMO().litGenesNote && d.origin === 'demo' ? `<p id="about-lit-genes">${esc(DEMO().litGenesNote)}</p>` : ''}</div>
+        <h4>Literature support</h4><p>${esc(lm?.name || 'Human pancreas literature')} index ${esc(lm?.version || '')}: ${num(lm?.papers)} ${esc(scopeInfo().noun)} with PubTator3 gene annotations${lsrc.genePapers ? ` (${esc(lsrc.genePapers)})` : ''}, matched to the enzymes of each reaction step; curated enzyme evidence from ${esc(lsrc.curated || 'UniProtKB/Swiss-Prot')}.</p>${DEMO().litGenesNote && d.origin === 'demo' ? `<p id="about-lit-genes">${esc(DEMO().litGenesNote)}</p>` : ''}${d.origin === 'demo' ? (DEMO().extraMethods || []).map(m => `<h4>${esc(m.title)}</h4><p data-extra-method="${esc(m.key || '')}">${esc(m.text)}</p>`).join('') : ''}</div>
     </div></div></section>
   <section class="card section"><div class="card-head"><div><div class="card-title">Reading the results</div></div></div><div class="card-body prose"><ul>${(demo.limitations || []).map(l => `<li>${esc(l)}</li>`).join('')}</ul></div></section>
   <section class="card section"><div class="card-head"><div><div class="card-title">Data credits</div><div class="card-sub">Public datasets used in this demo</div></div></div>
@@ -1581,6 +1930,7 @@ function resetViewState() {
   Object.assign(state.cmp, { setSearch: '', geneSearch: '', geneLimit: 60, setLimit: 40, gene: null, set: null });
   state.lit.conn = null; state.lit.filter = 'genes'; state.litCache = {}; state.mapFig = null;
   state.pathway = defaultPathway();
+  state.compView = 'samples'; state.healthyView = 'markers'; state.lookup = { q: '', gene: null, all: false }; state.spatial = { section: null, regions: false };
 }
 async function pollJob() {
   const id = state.job.id;
@@ -1701,7 +2051,7 @@ const ROW_KEYS = ['pathway', 'gs', 'litrow', 'samplePick', 'gene', 'cmpgene', 'c
 document.addEventListener('click', e => {
   const link = e.target.closest('a[href]');
   if (link && !link.dataset.view) return;   /* ordinary links (PubMed, KEGG, downloads) open without selecting the row */
-  const el = e.target.closest('[data-view],[data-action],[data-pathway],[data-type],[data-color],[data-gene],[data-figure],[data-src],[data-gscol],[data-gs],[data-gstype],[data-littype],[data-cmpcol],[data-cmpgene],[data-cmpset],[data-sort-table],[data-sample-pick],[data-space],[data-mapgroup],[data-heat-all],[data-heat-scale],[data-litfilter],[data-litrow],.modal-close,.menu-btn,.overlay');
+  const el = e.target.closest('[data-view],[data-action],[data-pathway],[data-type],[data-color],[data-gene],[data-figure],[data-src],[data-gscol],[data-gs],[data-gstype],[data-littype],[data-cmpcol],[data-cmpgene],[data-cmpset],[data-sort-table],[data-sample-pick],[data-space],[data-mapgroup],[data-heat-all],[data-heat-scale],[data-litfilter],[data-litrow],[data-ovgene],[data-ovset],[data-gsjump],[data-lookup],[data-compview],[data-healthyview],[data-focustype],[data-spsection],.modal-close,.menu-btn,.overlay');
   if (!el) return;
   if (el.classList.contains('overlay')) { if (e.target === el) closeModal(); return; }
   if (el.classList.contains('modal-close')) { closeModal(); return; }
@@ -1711,7 +2061,15 @@ document.addEventListener('click', e => {
   if (ds.sortTable) { toggleSort(ds.sortTable, ds.sortKey); if (ds.sortTable === 'lit') rerenderLiterature(); else rerender(); return; }
   if (ds.pathway) { state.pathway = ds.pathway; state.lit.conn = null; if (state.view === 'pathways') rerender(); else setView('pathways'); return; }
   if (ds.samplePick) { state.selSample = ds.samplePick; rerender(); return; }
-  if (ds.space) { state.mapSpace = ds.space; rerender(); return; }
+  if (ds.space) { state.mapSpace = ds.space; if (ds.space === 'metabolic' && state.group === HEALTHY) state.group = 'all'; rerender(); return; }
+  if (ds.ovgene) { state.cmp.gene = ds.ovgene; state.cmp.geneSearch = ''; setView('genes'); return; }
+  if (ds.ovset) { if (ds.ovcol) state.cmp.collection = ds.ovcol; state.cmp.set = ds.ovset; state.cmp.setSearch = ''; setView('compare'); return; }
+  if (ds.gsjump) { if (ds.gscolj) state.gs.on.add(ds.gscolj); state.gs.set = ds.gsjump; state.gs.search = ''; setView('signaling'); return; }
+  if (ds.lookup) { state.lookup.gene = ds.lookup; state.lookup.q = ds.lookup; state.lookup.all = false; rerender(); return; }
+  if (ds.compview) { state.compView = ds.compview; rerender(); return; }
+  if (ds.healthyview) { state.healthyView = ds.healthyview; rerender(); return; }
+  if (ds.focustype) { const all = state.data.cellTypes.map(t => t.name), only = all.filter(t => !state.hidden.has(t)); state.hidden = only.length === 1 && only[0] === ds.focustype ? new Set() : new Set(all.filter(t => t !== ds.focustype)); rerender(); return; }
+  if (ds.spsection) { state.spatial.section = ds.spsection; rerender(); return; }
   if (ds.mapgroup) { state.group = ds.mapgroup; state.sample = 'all'; rerender(); return; }
   if (ds.heatAll !== undefined) { state.heatAll = ds.heatAll === '1'; rerender(); return; }
   if (ds.heatScale) { state.heatScale = ds.heatScale; rerender(); return; }
@@ -1749,6 +2107,9 @@ document.addEventListener('click', e => {
     case 'exportpathways': exportPathways(); break;
     case 'exportcomposition': exportComposition(); break;
     case 'exportliterature': exportLiterature(); break;
+    case 'lookupall': state.lookup.all = true; rerender(); break;
+    case 'spzoom': spatialZoom(ds.spkind, ds.spid, ds.splabel); break;
+    case 'spregions': state.spatial.regions = !state.spatial.regions; rerender(); break;
     case 'downloadjob': downloadJob('results'); break;
     case 'hidejob': closeModal(); break;
     case 'resumejob': if (state.job && state.worker.ready) { state.job.pollingError = null; state.polling = true; jobModal(); pollJob(); } break;
@@ -1765,15 +2126,16 @@ document.addEventListener('change', e => {
   }
 });
 document.addEventListener('input', e => {
-  const live = { 'pathway-search': v => { state.search = v; }, 'gs-search': v => { state.gs.search = v; state.gs.limit = 60; }, 'cmp-set-search': v => { state.cmp.setSearch = v; }, 'cmp-gene-search': v => { state.cmp.geneSearch = v; } }[e.target.id];
+  const live = { 'pathway-search': v => { state.search = v; }, 'gs-search': v => { state.gs.search = v; state.gs.limit = 60; }, 'cmp-set-search': v => { state.cmp.setSearch = v; }, 'cmp-gene-search': v => { state.cmp.geneSearch = v; }, 'lookup-input': v => { state.lookup.q = v; state.lookup.gene = null; state.lookup.all = false; } }[e.target.id];
   if (live) {
-    const id = e.target.id, pos = e.target.selectionStart; live(e.target.value.toLowerCase()); rerender();
+    const id = e.target.id, pos = e.target.selectionStart; live(id === 'lookup-input' ? e.target.value : e.target.value.toLowerCase()); rerender();
     const input = $(`#${id}`); if (input) { input.focus(); input.setSelectionRange(pos, pos); }
   }
 });
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape' && $('.overlay')) closeModal();
   if (e.key === 'Enter' && e.target.matches?.('tr.clickable')) e.target.click();
+  if (e.key === 'Enter' && e.target.id === 'lookup-input') { const b = $('#lookup-matches button, #lookup-ambiguous button'); if (b) b.click(); }
 });
 $('#result-file').onchange = async e => {
   try {
