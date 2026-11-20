@@ -6,8 +6,13 @@
   <title>Cellaris AI Demo · PDAC cell-type and metabolic profiling from bulk RNA-seq</title>
   <meta name="description" content="Cellaris AI Demo: cell-type composition, estimated single-cell profiles, metabolic and signaling pathway activity, literature support and a tumor-versus-adjacent comparison for pancreatic ductal adenocarcinoma (PDAC) bulk RNA-seq.">
   <meta name="theme-color" content="#0b1f33">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Cellaris AI Demo · PDAC cell-type and metabolic profiling from bulk RNA-seq">
+  <meta property="og:description" content="Estimated cell-type composition and single-cell profiles, metabolic and signaling pathway activity, literature support and a tumor-versus-adjacent comparison for pancreatic ductal adenocarcinoma (PDAC) bulk RNA-seq.">
+  <meta property="og:url" content="https://echang992000.github.io/cellaris-ai-demo/">
+  <meta property="og:image" content="https://echang992000.github.io/cellaris-ai-demo/figures/fig2_maps.png">
   <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=2026-11-20">
 </head>
 <body>
 <div class="app">
@@ -37,18 +42,18 @@
   </aside>
   <div class="main">
     <header class="topbar">
-      <button class="menu-btn" aria-label="Open navigation">☰</button>
+      <button class="menu-btn" aria-label="Open navigation" aria-expanded="false" aria-controls="sidebar">☰</button>
       <div class="crumbs">Cellaris AI Demo <span aria-hidden="true">/</span> <b id="crumb">Overview</b></div>
       <div class="top-actions"><button class="btn btn-ghost" data-action="guide">Getting started</button><button class="btn btn-secondary" data-action="export"><i data-icon="download"></i> Export</button></div>
     </header>
-    <main id="view" class="view" tabindex="-1"></main>
+    <main id="view" class="view" tabindex="-1"><noscript><p class="noscript">The Cellaris AI Demo is an interactive page and needs JavaScript. Turn JavaScript on in your browser to see the results.</p></noscript></main>
     <footer class="footer">Cellaris AI Demo<span id="build-label"></span> · Research use only · Analyses run in your Cellaris compute workspace; this website does not store uploaded data.</footer>
   </div>
 </div>
 <div id="modal-root"></div>
 <div id="toast" role="status" aria-live="polite"></div>
 <input type="file" id="result-file" accept=".json,application/json" hidden>
-<script src="demo-data.js" defer></script>
-<script src="app.js" defer></script>
+<script src="demo-data.js?v=2026-11-20" defer></script>
+<script src="app.js?v=2026-11-20" defer></script>
 </body>
 </html>
