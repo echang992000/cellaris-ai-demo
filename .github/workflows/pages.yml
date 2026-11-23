@@ -33,5 +33,8 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
+      # the deploy step looks the artifact up by name; on 23 November 2026 the listing lagged a few seconds behind the upload and the deployment failed
+      - name: Wait until the uploaded artifact is listed
+        run: sleep 30
       - id: deployment
         uses: actions/deploy-pages@v4
