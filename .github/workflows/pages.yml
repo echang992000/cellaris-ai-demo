@@ -26,6 +26,8 @@ jobs:
         run: |
           mkdir -p _site
           cp -R dist/. _site/
+          # mockdemo: test version of the site, published under /mockdemo/ (built by scripts/demos/build_mockdemo.py of the worker repository)
+          if [ -d mockdemo ]; then mkdir -p _site/mockdemo && cp -R mockdemo/. _site/mockdemo/; fi
           touch _site/.nojekyll
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

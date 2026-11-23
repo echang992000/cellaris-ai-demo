@@ -1,0 +1,6 @@
+/* mockdemo only: marks the test version of the site. Not part of the public demo. */
+.mock-banner{background:#fff4d6;border-bottom:1px solid #f0c95c;color:#5c4400;font-size:12.5px;line-height:1.45;padding:7px 28px}
+.mock-banner b{letter-spacing:.02em}
+.mock-banner a{color:#5c4400;text-decoration:underline;margin-left:6px;white-space:nowrap}
+.brand-tag.mock-tag{background:#f0c95c;color:#3d2e00}
+@media (max-width:760px){.mock-banner{padding:7px 16px}}

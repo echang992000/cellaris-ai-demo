@@ -5,6 +5,8 @@ adenocarcinoma (PDAC).
 
 **Live site:** https://echang992000.github.io/cellaris-ai-demo/
 
+**Test version (mockdemo):** https://echang992000.github.io/cellaris-ai-demo/mockdemo/ is a second copy of the site in the folder `mockdemo/`, used to try out new features and layouts before they reach the public demo. A banner marks it, search engines are asked not to index it, and what it shows may be unfinished. `dist/` is the public demo.
+
 Cellaris estimates cell-type composition, single-cell expression profiles, metabolic activity and
 signaling pathway activity of individual cell types from bulk RNA-seq of human pancreas or pancreatic
 tumor tissue, and compares groups of samples. The site presents one completed analysis of public data:
